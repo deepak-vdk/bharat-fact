@@ -688,7 +688,7 @@ class BeautifulUI:
                 for k in ["last_query"]:
                     if k in st.session_state:
                         del st.session_state[k]
-                st.experimental_rerun()
+                st.rerun()
         
         # Close the form wrapper
         st.markdown("</div>", unsafe_allow_html=True)
