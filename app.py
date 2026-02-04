@@ -856,8 +856,14 @@ class HybridNewsVerifier:
 
 
         return result
-    # @st.cache_data(show_spinner=False)
+    @st.cache_data(show_spinner=False)
     def tag_evidence_support(self, news_claim: str, live_evidence: list):
+        
+        # Convert evidence to stable, cacheable form
+        evidence_titles = tuple(
+            article.get("title", "") for article in live_evidence
+        )
+
         if not live_evidence:
             return {
                 "items": [],
@@ -882,8 +888,8 @@ class HybridNewsVerifier:
             }
 
         headlines = []
-        for i, article in enumerate(live_evidence, 1):
-            headlines.append(f"{i}. {article.get('title','')}")
+        for i, title in enumerate(evidence_titles, 1):
+            headlines.append(f"{i}. {title}")
 
         prompt = f"""
 Claim:
