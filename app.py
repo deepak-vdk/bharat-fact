@@ -769,65 +769,26 @@ class HybridNewsVerifier:
         self._setup_gemini_ai()
     
     def _setup_gemini_ai(self):
+        """
+        Initialize Gemini AI safely without making API calls at startup.
+        """
         try:
             import google.generativeai as genai
-        except Exception as e:
-            self.initialization_error = f"Gemini SDK import failed: {e}"
+        except ImportError:
+            self.initialization_error = "Gemini SDK not installed"
             return
 
         api_key = EnhancedAppConfig.GEMINI_API_KEY
         if not api_key:
-            self.initialization_error = "No GEMINI_API_KEY found"
+            self.initialization_error = "GEMINI_API_KEY not found"
             return
-
         try:
             genai.configure(api_key=api_key)
+            self.model = genai.GenerativeModel("gemini-1.5-flash")
+            self.is_ready = True
         except Exception as e:
-            self.initialization_error = f"Gemini configure failed: {e}"
-            return
+            self.initialization_error = f"Gemini initialization failed: {e}"
 
-        known_models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.5-mini', 'gemini-1.0']
-        init_errors = []
-        for model_name in known_models:
-            try:
-                model = genai.GenerativeModel(model_name)
-                try:
-                    gen = model.generate_content("Hello")
-                    text = getattr(gen, 'text', None) or (gen.get('text') if isinstance(gen, dict) else None)
-                    if text:
-                        self.model = model
-                        self.is_ready = True
-                        return
-                except Exception as e:
-                    init_errors.append(f"{model_name}: {e}")
-                    continue
-            except Exception as e:
-                init_errors.append(f"{model_name}: {e}")
-                continue
-
-        try:
-            listed = []
-            for m in genai.list_models():
-                name = getattr(m, 'name', None) or (m.get('name') if isinstance(m, dict) else None)
-                if name:
-                    listed.append(name.split('/')[-1])
-            for nm in listed:
-                if nm in known_models:
-                    continue
-                try:
-                    model = genai.GenerativeModel(nm)
-                    gen = model.generate_content("Hello")
-                    text = getattr(gen, 'text', None) or (gen.get('text') if isinstance(gen, dict) else None)
-                    if text:
-                        self.model = model
-                        self.is_ready = True
-                        return
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        self.initialization_error = "Could not initialize Gemini model. " + ("; ".join(init_errors[:6]) if init_errors else "")
 
     def verify_news(self, news_claim: str):
         if not self.is_ready:
