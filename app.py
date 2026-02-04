@@ -24,6 +24,10 @@ from requests.exceptions import RequestException, Timeout
 import requests
 from bs4 import BeautifulSoup
 
+import hashlib
+from pathlib import Path
+
+
 # =========================
 # ENHANCED CONFIG
 # =========================
@@ -67,6 +71,14 @@ class EnhancedAppConfig:
         "Boom Live - https://www.boomlive.in",
         "The Quint WebQoof - https://www.thequint.com/news/webqoof"
     ]
+
+# =========================
+# PERSISTENT VERIFICATION CACHE
+# =========================
+
+CACHE_DIR = Path(".cache")
+CACHE_DIR.mkdir(exist_ok=True)
+CACHE_FILE = CACHE_DIR / "verification_cache.json"
 
 # =========================
 # UTILITIES
@@ -128,6 +140,34 @@ def _safe_filename(s: str, maxlen: int = 50) -> str:
     s = re.sub(r'[^\w\s-]', '', s)
     s = re.sub(r'\s+', '_', s).strip('_')
     return s[:maxlen] or "fact_check"
+
+def _normalize_claim(text: str) -> str:
+    """Normalize claim text for consistent hashing."""
+    return re.sub(r'\s+', ' ', text.strip().lower())
+
+
+def _claim_hash(text: str) -> str:
+    """Generate SHA256 hash for a news claim."""
+    normalized = _normalize_claim(text)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _load_verification_cache() -> Dict[str, Any]:
+    if not CACHE_FILE.exists():
+        return {}
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_verification_cache(cache: Dict[str, Any]) -> None:
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 # =========================
 # CACHED TOP-LEVEL FETCH HELPERS
@@ -787,7 +827,16 @@ class HybridNewsVerifier:
         if not self.is_ready:
             return self._create_error_response(self.initialization_error or "AI engine not ready")
 
-        live_evidence = []
+        claim_key = _claim_hash(news_claim)
+        cache = _load_verification_cache()
+
+        # ✅ Return cached result if available
+        if claim_key in cache:
+            cached = cache[claim_key]
+            cached["cached"] = True
+            return cached
+
+        # ❌ Not cached → full verification
         try:
             live_evidence = self.news_fetcher.fetch_all_news_sources(news_claim)
         except Exception:
@@ -797,81 +846,102 @@ class HybridNewsVerifier:
 
         try:
             gen = self.model.generate_content(prompt)
-            ai_text = getattr(gen, 'text', None) or (gen.get('text') if isinstance(gen, dict) else None)
+            ai_text = getattr(gen, "text", None) or (
+                gen.get("text") if isinstance(gen, dict) else None
+            )
             if not ai_text:
                 return self._create_error_response("No response from AI")
         except Exception as e:
             return self._create_error_response(f"AI analysis failed: {e}")
 
-        return self._parse_hybrid_response(ai_text, live_evidence)
+        result = self._parse_hybrid_response(ai_text, live_evidence)
 
+        # ✅ Save result to cache
+        result["cached"] = False
+        cache[claim_key] = result
+        _save_verification_cache(cache)
+
+
+        return result
     @st.cache_data(show_spinner=False)
-    def tag_evidence_support(_self, news_claim: str, live_evidence: list):
+    def tag_evidence_support(self, news_claim: str, live_evidence: list):
+        if not live_evidence:
+            return {
+                "items": [],
+                "counts": {
+                    "supportive": 0,
+                    "contradictory": 0,
+                    "irrelevant": 0
+                }
+            }
+
         try:
             import google.generativeai as genai
+            model = self.model or genai.GenerativeModel("gemini-1.5-flash")
         except Exception:
-            return {"items": [], "counts": {"supportive": 0, "contradictory": 0, "irrelevant": 0}}
+            return {
+                "items": [],
+                "counts": {
+                    "supportive": 0,
+                    "contradictory": 0,
+                    "irrelevant": 0
+                }
+            }
 
-        if not live_evidence:
-            return {"items": [], "counts": {"supportive": 0, "contradictory": 0, "irrelevant": 0}}
+        headlines = []
+        for i, article in enumerate(live_evidence, 1):
+            headlines.append(f"{i}. {article.get('title','')}")
 
-        lines = []
-        for idx, art in enumerate(live_evidence, 1):
-            title = art.get('title', '').strip()
-            src = art.get('source', '')
-            title_line = f"{idx}. {title}"
-            if src:
-                title_line += f" (Source: {src})"
-            lines.append(title_line)
-
-        headlines_block = "\n".join(lines)
-
-        instruction = f"""
-You will classify news headlines relative to the CLAIM.
-
-CLAIM:
+        prompt = f"""
+Claim:
 "{news_claim}"
 
-HEADLINES:
-{headlines_block}
+Headlines:
+{chr(10).join(headlines)}
 
-For each headline, decide:
-- supportive: directly supports the claim
-- contradictory: directly contradicts the claim
-- irrelevant: not directly related or insufficient to judge
+Classify each headline as:
+supportive, contradictory, or irrelevant.
 
-Return STRICT JSON (array) with objects: {{"index": <int>, "tag": "supportive|contradictory|irrelevant", "rationale": "short reason"}}. No extra text.
+Return STRICT JSON like:
+[
+  {{"index":1,"tag":"supportive","rationale":"short reason"}}
+]
 """
 
-        model = _self.model if _self and getattr(_self, 'model', None) else None
         try:
-            if not model:
-                model = genai.GenerativeModel('gemini-1.5-flash')
-            gen = model.generate_content(instruction)
-            raw = getattr(gen, 'text', '') or (gen.get('text') if isinstance(gen, dict) else '')
+            response = model.generate_content(prompt)
+            raw = getattr(response, "text", "")
         except Exception:
-            return {"items": [], "counts": {"supportive": 0, "contradictory": 0, "irrelevant": 0}}
+            return {
+                "items": [],
+                "counts": {
+                    "supportive": 0,
+                    "contradictory": 0,
+                    "irrelevant": 0
+                }
+            }
 
         data = extract_first_json(raw)
+
+        counts = {
+            "supportive": 0,
+            "contradictory": 0,
+            "irrelevant": 0
+        }
         items = []
+
         if isinstance(data, list):
             for obj in data:
-                try:
-                    idx = int(obj.get('index'))
-                    tag = str(obj.get('tag', '')).strip().lower()
-                    rationale = str(obj.get('rationale', '')).strip()
-                    if tag not in ("supportive", "contradictory", "irrelevant"):
-                        tag = "irrelevant"
-                    title = live_evidence[idx-1]['title'] if 1 <= idx <= len(live_evidence) else ''
-                    items.append({"index": idx, "title": title, "tag": tag, "rationale": rationale})
-                except Exception:
-                    continue
+                tag = obj.get("tag", "irrelevant")
+                if tag not in counts:
+                    tag = "irrelevant"
+                counts[tag] += 1
+                items.append(obj)
 
-        counts = {"supportive": 0, "contradictory": 0, "irrelevant": 0}
-        for it in items:
-            counts[it['tag']] = counts.get(it['tag'], 0) + 1
-
-        return {"items": items, "counts": counts}
+        return {
+            "items": items,
+            "counts": counts
+        }
 
     def _create_hybrid_prompt(self, news_claim: str, live_evidence: list):
         evidence_text = ""
@@ -1372,6 +1442,10 @@ class EnhancedUI:
 
         st.markdown("")
         EnhancedUI.render_download_section(result_data)
+
+        if result_data.get("cached"):
+            st.info("⚡ Result loaded from cache (no new API calls)")
+
         
         # Close the wrapper div
         st.markdown('</div>', unsafe_allow_html=True)
