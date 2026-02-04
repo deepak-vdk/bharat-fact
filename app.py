@@ -27,6 +27,7 @@ from bs4 import BeautifulSoup
 import hashlib
 from pathlib import Path
 
+import tempfile
 
 # =========================
 # ENHANCED CONFIG
@@ -175,11 +176,27 @@ def _load_verification_cache() -> Dict[str, Any]:
 
 
 def _save_verification_cache(cache: Dict[str, Any]) -> None:
+    """
+    Safely save cache using atomic write to prevent corruption.
+    """
     try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
+        CACHE_DIR.mkdir(exist_ok=True)
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=CACHE_DIR,
+            delete=False
+        ) as tmp:
+            json.dump(cache, tmp, ensure_ascii=False, indent=2)
+            temp_name = tmp.name
+
+        # Atomic replace
+        os.replace(temp_name, CACHE_FILE)
+
     except Exception as e:
-        st.warning(f"Failed to save cache: {e}")
+        st.warning(f"Failed to safely save cache: {e}")
+
 
 # =========================
 # CACHED TOP-LEVEL FETCH HELPERS
