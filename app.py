@@ -1546,7 +1546,18 @@ class EnhancedUI:
             story.append(Spacer(1, 0.2*inch))
             story.append(disclaimer)
             story.append(Spacer(1, 0.1*inch))
-            story.append(Paragraph(f"<i>Report generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}</i>", ParagraphStyle('meta', parent=styles['Normal'], fontSize=9, alignment=TA_CENTER)))
+            story.append(
+                Paragraph(
+                    f"<i>Report generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}</i>",
+                    ParagraphStyle(
+                        'meta',
+                        parent=styles['Normal'],
+                        fontSize=9,
+                        alignment=TA_CENTER
+                    )
+                )
+            )
+
 
             doc.build(story)
             buffer.seek(0)
