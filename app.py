@@ -33,13 +33,19 @@ from pathlib import Path
 # =========================
 
 def get_api_key(service_name: str) -> str:
-    """Get API keys from Streamlit secrets or environment."""
+    """
+    Safely get API keys from Streamlit secrets or environment variables.
+    """
+    key_name = f"{service_name}_API_KEY"
+
+    # 1 Try Streamlit secrets
     try:
-        if isinstance(st.secrets, dict) and f"{service_name}_API_KEY" in st.secrets:
-            return st.secrets[f"{service_name}_API_KEY"]
+        return st.secrets[key_name]
     except Exception:
         pass
-    return os.getenv(f"{service_name}_API_KEY", "")
+
+    # 2 Fallback to environment variable
+    return os.getenv(key_name, "")
 
 class EnhancedAppConfig:
     GEMINI_API_KEY = get_api_key("GEMINI")
