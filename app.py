@@ -863,7 +863,7 @@ class HybridNewsVerifier:
 
 
         return result
-    @st.cache_data(show_spinner=False)
+    # @st.cache_data(show_spinner=False)
     def tag_evidence_support(self, news_claim: str, live_evidence: list):
         if not live_evidence:
             return {
