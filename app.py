@@ -114,8 +114,9 @@ def safe_requests_get(
             resp.raise_for_status()
             return resp
 
-        except (RequestException, Timeout):
+        except (RequestException, Timeout) as e:
             if attempt == retries - 1:
+                st.warning(f"Request failed: {e}")
                 return None
             time.sleep(backoff_factor * (2 ** attempt))
 
@@ -164,7 +165,8 @@ def _load_verification_cache() -> Dict[str, Any]:
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        st.warning(f"Failed to load cache: {e}")
         return {}
 
 
@@ -172,8 +174,8 @@ def _save_verification_cache(cache: Dict[str, Any]) -> None:
     try:
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"Failed to save cache: {e}")
 
 # =========================
 # CACHED TOP-LEVEL FETCH HELPERS
@@ -211,7 +213,8 @@ def cached_fetch_google_news_rss(query: str, max_results: int = 8) -> List[Dict[
                     "source": source,
                     "api": "Google News RSS"
                 })
-    except Exception:
+    except Exception as e:
+        st.warning(f"Google News RSS fetch failed: {e}")
         return []
     return results
 
@@ -247,7 +250,8 @@ def cached_fetch_newsapi(query: str, newsapi_key: str, max_results: int = 8) -> 
                     "source": article.get('source', {}).get('name', ''),
                     "api": "NewsAPI"
                 })
-    except Exception:
+    except Exception as e:
+        st.warning(f"NewsAPI fetch failed: {e}")
         return []
     return results
 
@@ -277,7 +281,8 @@ def cached_fetch_gdelt(query: str, max_results: int = 6) -> List[Dict[str, Any]]
                 "source": article.get('domain', ''),
                 "api": "GDELT"
             })
-    except Exception:
+    except Exception as e:
+        st.warning(f"NewsAPI fetch failed: {e}")
         return []
     return results
 
