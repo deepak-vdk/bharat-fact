@@ -120,26 +120,30 @@ def safe_requests_get(
                 return None
             time.sleep(backoff_factor * (2 ** attempt))
 
-
 def extract_first_json(text: str):
-    """Attempt to find and parse the first JSON object/array in text."""
+    """
+    Safely extract the first valid JSON object or array from text.
+    """
     if not text or not isinstance(text, str):
         return None
-    m = re.search(r'(\[.*\]|\{.*\})', text, flags=re.DOTALL)
-    if not m:
-        return None
-    candidate = m.group(1)
-    for trim_end in range(len(candidate), 0, -1):
-        try:
-            part = candidate[:trim_end]
-            parsed = json.loads(part)
-            return parsed
-        except Exception:
-            continue
-    try:
-        return json.loads(candidate)
-    except Exception:
-        return None
+
+    text = text.strip()
+
+    # Try to find JSON object or array start positions
+    starts = []
+    for i, ch in enumerate(text):
+        if ch == '{' or ch == '[':
+            starts.append(i)
+
+    for start in starts:
+        for end in range(start + 1, len(text) + 1):
+            try:
+                candidate = text[start:end]
+                return json.loads(candidate)
+            except Exception:
+                continue
+
+    return None
 
 def _safe_filename(s: str, maxlen: int = 50) -> str:
     if not s:
