@@ -46,12 +46,15 @@ class EnhancedAppConfig:
     AUTHOR_CREDIT = "Deepak"
 
     COLORS = {
-        'primary': '#FF6B35',
-        'secondary': '#004E89',
-        'success': '#2ECC71',
-        'warning': '#F39C12',
-        'danger': '#E74C3C',
-        'info': '#3498DB'
+        'primary': '#1E3A5F',
+        'secondary': '#2C5282',
+        'success': '#38A169',
+        'warning': '#D69E2E',
+        'danger': '#E53E3E',
+        'info': '#3182CE',
+        'background': '#F7FAFC',
+        'text': '#2D3748',
+        'text_light': '#718096'
     }
 
     TRUSTED_SOURCES = [
@@ -239,81 +242,231 @@ def cached_fetch_gdelt(query: str, max_results: int = 6) -> List[Dict[str, Any]]
 class BeautifulUI:
     @staticmethod
     def setup_page_config():
-        # no emoji in page icon
         try:
-            st.set_page_config(page_title=EnhancedAppConfig.APP_TITLE, page_icon="", layout="wide", initial_sidebar_state="collapsed")
+            st.set_page_config(
+                page_title=EnhancedAppConfig.APP_TITLE, 
+                page_icon="", 
+                layout="wide", 
+                initial_sidebar_state="collapsed"
+            )
         except Exception:
-            # ignore if already set
             pass
-        hide_style = dedent("""
+        
+        # Professional, clean styling
+        custom_css = dedent("""
         <style>
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
+        
+        /* Main container styling */
+        .main .block-container {
+            padding-top: 1rem;
+            padding-bottom: 1rem;
+            max-width: 1400px;
+            padding-left: 3rem;
+            padding-right: 3rem;
+        }
+        
+        @media (max-width: 768px) {
+            .main .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+        }
+        
+        /* Text styling - adaptive colors */
+        h1, h2, h3 {
+            color: #E2E8F0;
+            font-weight: 600;
+        }
+        
+        /* Ensure readable text on dark background */
+        .stMarkdown, p, label, div {
+            color: #CBD5E0;
+        }
+        
+        /* Button styling - enhanced */
+        .stButton > button {
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 0.5rem 1.5rem;
+            font-size: 1rem;
+        }
+        
+        .stButton > button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        
+        /* Primary button special styling */
+        .stButton > button[kind="primary"] {
+            background: linear-gradient(135deg, #2C5282 0%, #1E3A5F 100%);
+            border: none;
+        }
+        
+        /* Input styling - enhanced */
+        .stTextInput > div > div > input,
+        .stTextArea > div > div > textarea {
+            border-radius: 8px;
+            border: 2px solid rgba(226, 232, 240, 0.5);
+            transition: all 0.3s ease;
+            background-color: transparent;
+            font-size: 0.95rem;
+        }
+        
+        .stTextInput > div > div > input:focus,
+        .stTextArea > div > div > textarea:focus {
+            border-color: #2C5282;
+            box-shadow: 0 0 0 3px rgba(44, 82, 130, 0.1);
+            outline: none;
+        }
+        
+        /* Radio button styling */
+        .stRadio > div {
+            background-color: transparent;
+            padding: 14px 16px;
+            border-radius: 8px;
+            border: 2px solid rgba(226, 232, 240, 0.5);
+            transition: all 0.3s ease;
+        }
+        
+        .stRadio > div:hover {
+            border-color: rgba(203, 213, 224, 0.7);
+            background-color: rgba(247, 250, 252, 0.3);
+        }
+        
+        /* Label styling */
+        label {
+            font-weight: 600;
+            color: #2D3748;
+            font-size: 0.95rem;
+        }
+        
+        /* Metric cards */
+        [data-testid="stMetricValue"] {
+            font-size: 1.8rem;
+        }
+        
+        /* Spacing */
+        .element-container {
+            margin-bottom: 1rem;
+        }
+        
+        /* Card-like container for form */
+        .form-container {
+            background: transparent;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 1px 3px rgba(0, 0, 0, 0.06);
+            border: 1px solid rgba(226, 232, 240, 0.3);
+        }
+        
+        /* Make main background adaptive */
+        .stApp {
+            background: var(--background-color, #0E1117);
+        }
+        
+        /* Ensure text is readable on dark background */
+        .main h1, .main h2, .main h3 {
+            color: #E2E8F0;
+        }
+        
+        p, label, .stMarkdown {
+            color: #CBD5E0;
+        }
         </style>
         """).lstrip()
-        st.markdown(hide_style, unsafe_allow_html=True)
+        st.markdown(custom_css, unsafe_allow_html=True)
 
     @staticmethod
     def render_header():
-        # Centered, compact and professional header rendered via components.html
         primary = EnhancedAppConfig.COLORS["primary"]
         secondary = EnhancedAppConfig.COLORS["secondary"]
-        author = EnhancedAppConfig.AUTHOR_CREDIT
+        text_light = EnhancedAppConfig.COLORS["text_light"]
 
         html = dedent(f"""
         <div style="
-            max-width: 900px;
-            margin: 12px auto 18px auto;
-            text-align: center;
-            padding: 6px 16px;
+            max-width: 1200px;
+            margin: 0 auto 2rem auto;
+            padding: 3.5rem 4rem 3rem 4rem;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.8) 0%, rgba(30, 41, 59, 0.6) 100%);
+            border-radius: 24px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(226, 232, 240, 0.15);
+            backdrop-filter: blur(20px);
+            position: relative;
+            overflow: visible;
         ">
-            <h1 style="
-                color: {primary};
-                font-size: 2.2rem;
-                margin: 0;
-                font-weight: 700;
-                line-height: 1.1;
-                letter-spacing: -0.5px;
-            ">{EnhancedAppConfig.APP_TITLE}</h1>
+            <!-- Subtle background pattern -->
+            <div style="
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: radial-gradient(circle at 20% 50%, rgba(44, 82, 130, 0.1) 0%, transparent 50%),
+                            radial-gradient(circle at 80% 80%, rgba(30, 58, 95, 0.1) 0%, transparent 50%);
+                pointer-events: none;
+            "></div>
+            
+            <!-- Content wrapper -->
+            <div style="position: relative; z-index: 1;">
+                <!-- Top accent line -->
+                <div style="
+                    width: 100px;
+                    height: 5px;
+                    background: linear-gradient(90deg, {primary} 0%, {secondary} 100%);
+                    border-radius: 3px;
+                    margin: 0 auto 2.5rem auto;
+                    box-shadow: 0 2px 8px rgba(44, 82, 130, 0.4);
+                "></div>
+                
+                <!-- Header Section -->
+                <div style="text-align: center; padding-bottom: 0.5rem;">
+                    <h1 style="
+                        background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+                        -webkit-background-clip: text;
+                        -webkit-text-fill-color: transparent;
+                        background-clip: text;
+                        font-size: 3.8rem;
+                        margin: 0 0 1rem 0;
+                        font-weight: 800;
+                        line-height: 1.1;
+                        letter-spacing: -0.06em;
+                    ">{EnhancedAppConfig.APP_TITLE}</h1>
 
-            <p style="
-                color: {secondary};
-                font-size: 1rem;
-                margin: 8px 0 4px 0;
-            ">AI-powered fact checking and verification</p>
-
-            <p style="
-                color: #7F8C8D;
-                font-size: 0.85rem;
-                margin: 4px 0 10px 0;
-            ">Author: {author}</p>
-
-            <hr style="
-                border: none;
-                height: 2px;
-                background: {primary};
-                margin-top: 8px;
-                opacity: 0.12;
-            " />
+                    <p style="
+                        color: {text_light};
+                        font-size: 1.3rem;
+                        margin: 0;
+                        font-weight: 400;
+                        letter-spacing: 0.03em;
+                        opacity: 0.85;
+                    ">AI-Powered News Verification Platform</p>
+                </div>
+            </div>
         </div>
         """).lstrip()
 
-        # Use components.html to ensure raw HTML is injected (avoids markdown interpreting it)
-        components.html(html, height=140, scrolling=False)
+        components.html(html, height=280, scrolling=False)
 
     @staticmethod
     def render_sidebar():
         with st.sidebar:
             st.markdown("### How It Works")
-            st.markdown("1. Enter the news claim or article URL")
-            st.markdown("2. AI-assisted analysis")
-            st.markdown("3. Cross-check with trusted sources")
+            st.markdown("""
+            1. **Enter** news claim or URL
+            2. **Analyze** with AI verification
+            3. **Review** evidence and results
+            """)
             st.markdown("---")
-            st.markdown("### Note")
-            st.markdown("This tool assists verification. Always cross-check important claims.")
+            st.markdown("### Important")
+            st.markdown("This tool provides AI-assisted analysis. Always verify important claims with multiple trusted sources.")
             st.markdown("---")
-            st.markdown(f"**Version {EnhancedAppConfig.VERSION}**")
+            st.caption(f"Version {EnhancedAppConfig.VERSION}")
 
     @staticmethod
     def valid_url(url: str) -> bool:
@@ -360,42 +513,145 @@ class BeautifulUI:
         if 'clear_counter' not in st.session_state:
             st.session_state.clear_counter = 0
 
-        st.markdown("### Enter News to Verify")
-        input_method = st.radio("Choose input method:", ["Type/Paste Text", "News URL"], horizontal=True)
+        primary = EnhancedAppConfig.COLORS["primary"]
+        secondary = EnhancedAppConfig.COLORS["secondary"]
+        
+        # Form content wrapper - aligned with header container
+        form_wrapper = dedent(f"""
+        <div style="
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 4rem;
+        ">
+        """).lstrip()
+        st.markdown(form_wrapper, unsafe_allow_html=True)
+        
+        # Form content - now aligned with header
+        # Select Input Method section with elegant styling
+        input_method_header = dedent(f"""
+            <div style="
+                display: flex;
+                align-items: center;
+                margin-bottom: 1rem;
+                margin-top: 0.5rem;
+            ">
+                <div style="
+                    width: 5px;
+                    height: 28px;
+                    background: linear-gradient(180deg, {primary} 0%, {secondary} 100%);
+                    border-radius: 3px;
+                    margin-right: 1rem;
+                    box-shadow: 0 2px 6px rgba(44, 82, 130, 0.3);
+                "></div>
+                <strong style="color: #E2E8F0; font-size: 1.2rem; font-weight: 600;">Select Input Method</strong>
+            </div>
+            """).lstrip()
+        st.markdown(input_method_header, unsafe_allow_html=True)
+        input_method = st.radio(
+            "",
+            ["Text", "URL"],
+            horizontal=True,
+            label_visibility="collapsed"
+        )
+        
         news_text = ""
-
-        if input_method == "Type/Paste Text":
+        
+        if input_method == "Text":
             key = f"news_input_{st.session_state.clear_counter}"
-            news_text = st.text_area("Enter the news claim:", height=150, placeholder="Example: The government announced a new education policy today...", key=key)
+            news_claim_header = dedent(f"""
+            <div style="
+                display: flex;
+                align-items: center;
+                margin-bottom: 0.8rem;
+                margin-top: 1rem;
+            ">
+                <div style="
+                    width: 5px;
+                    height: 28px;
+                    background: linear-gradient(180deg, {primary} 0%, {secondary} 100%);
+                    border-radius: 3px;
+                    margin-right: 1rem;
+                    box-shadow: 0 2px 6px rgba(44, 82, 130, 0.3);
+                "></div>
+                <strong style="color: #E2E8F0; font-size: 1.2rem; font-weight: 600;">Enter News Claim</strong>
+            </div>
+            """).lstrip()
+            st.markdown(news_claim_header, unsafe_allow_html=True)
+            news_text = st.text_area(
+                "",
+                height=160,
+                placeholder="Paste the news claim or article text here for verification...",
+                key=key,
+                label_visibility="collapsed"
+            )
         else:
             url_key = f"url_input_{st.session_state.clear_counter}"
-            url = st.text_input("Enter news article URL:", placeholder="https://example.com/news-article", key=url_key)
+            url_header = dedent(f"""
+            <div style="
+                display: flex;
+                align-items: center;
+                margin-bottom: 0.8rem;
+                margin-top: 1rem;
+            ">
+                <div style="
+                    width: 5px;
+                    height: 28px;
+                    background: linear-gradient(180deg, {primary} 0%, {secondary} 100%);
+                    border-radius: 3px;
+                    margin-right: 1rem;
+                    box-shadow: 0 2px 6px rgba(44, 82, 130, 0.3);
+                "></div>
+                <strong style="color: #E2E8F0; font-size: 1.2rem; font-weight: 600;">Enter Article URL</strong>
+            </div>
+            """).lstrip()
+            st.markdown(url_header, unsafe_allow_html=True)
+            url = st.text_input(
+                "",
+                placeholder="https://example.com/news-article",
+                key=url_key,
+                label_visibility="collapsed"
+            )
             if url:
                 if BeautifulUI.valid_url(url):
-                    with st.spinner("Extracting text from URL..."):
+                    with st.spinner("Extracting content..."):
                         text = BeautifulUI.extract_text_from_url(url)
                         if text:
                             news_text = text
-                            st.success("Text extracted successfully (truncated).")
-                            st.text_area("Extracted text (truncated):", value=news_text, height=120, disabled=True)
+                            st.success("✓ Content extracted")
+                            st.text_area(
+                                "Extracted text:",
+                                value=news_text,
+                                height=100,
+                                disabled=True
+                            )
                         else:
-                            st.error("Could not extract usable text from the URL. Try another source or paste text manually.")
+                            st.error("Unable to extract text. Please try another URL or paste text directly.")
                 else:
-                    st.warning("Please enter a valid URL starting with http:// or https://")
+                    st.warning("Please enter a valid URL (http:// or https://)")
 
-        col1, col2, col3 = st.columns([2, 2, 3])
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Action buttons with better styling - centered
+        col1, col2, col3, col4, col5 = st.columns([1, 1.5, 1.5, 1.5, 1])
         with col1:
-            verify_clicked = st.button("Verify News", type="primary")
+            st.write("")  # Left spacer
         with col2:
-            example_clicked = st.button("Try Example")
+            verify_clicked = st.button("🔍 Verify News", type="primary", use_container_width=True)
         with col3:
-            clear_clicked = st.button("Clear")
+            example_clicked = st.button("📋 Try Example", use_container_width=True)
+        with col4:
+            clear_clicked = st.button("🗑️ Clear", use_container_width=True)
+        with col5:
+            st.write("")  # Right spacer
             if clear_clicked:
                 st.session_state.clear_counter += 1
                 for k in ["last_query"]:
                     if k in st.session_state:
                         del st.session_state[k]
                 st.experimental_rerun()
+        
+        # Close the form wrapper
+        st.markdown("</div>", unsafe_allow_html=True)
 
         if example_clicked:
             return "PM Modi is the current Prime Minister of India", verify_clicked, True
@@ -734,41 +990,226 @@ class EnhancedUI:
             st.error(result_data.get('analysis', 'Unknown error'))
             return
         
-        st.markdown("### Verification Results")
+        primary = EnhancedAppConfig.COLORS["primary"]
+        secondary = EnhancedAppConfig.COLORS["secondary"]
+        text_light = EnhancedAppConfig.COLORS["text_light"]
         
-        status_icons = {
-            'TRUE': ('TRUE', EnhancedAppConfig.COLORS['success']),
-            'FALSE': ('FALSE', EnhancedAppConfig.COLORS['danger']),
-            'PARTIALLY_TRUE': ('PARTIALLY_TRUE', EnhancedAppConfig.COLORS['warning']),
-            'MISLEADING': ('MISLEADING', '#E67E22'),
-            'UNVERIFIED': ('UNVERIFIED', '#95A5A6'),
-            'ERROR': ('ERROR', '#34495E')
+        # Elegant results container - matching header style
+        results_header_html = dedent(f"""
+        <div style="
+            max-width: 1200px;
+            margin: 2.5rem auto 0 auto;
+            padding: 3.5rem 4rem;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.8) 0%, rgba(30, 41, 59, 0.6) 100%);
+            border-radius: 24px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(226, 232, 240, 0.15);
+            backdrop-filter: blur(20px);
+            position: relative;
+            overflow: hidden;
+        ">
+            <!-- Subtle background pattern -->
+            <div style="
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: radial-gradient(circle at 20% 50%, rgba(44, 82, 130, 0.1) 0%, transparent 50%),
+                            radial-gradient(circle at 80% 80%, rgba(30, 58, 95, 0.1) 0%, transparent 50%);
+                pointer-events: none;
+            "></div>
+            
+            <!-- Content wrapper -->
+            <div style="position: relative; z-index: 1;">
+                <!-- Top accent line -->
+                <div style="
+                    width: 100px;
+                    height: 5px;
+                    background: linear-gradient(90deg, {primary} 0%, {secondary} 100%);
+                    border-radius: 3px;
+                    margin: 0 auto 2rem auto;
+                    box-shadow: 0 2px 8px rgba(44, 82, 130, 0.4);
+                "></div>
+                
+                <!-- Results Title Section -->
+                <div style="text-align: center; margin-bottom: 2.5rem; padding-bottom: 2rem; border-bottom: 1px solid rgba(226, 232, 240, 0.12);">
+                    <h2 style="
+                        background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+                        -webkit-background-clip: text;
+                        -webkit-text-fill-color: transparent;
+                        background-clip: text;
+                        font-size: 3rem;
+                        margin: 0;
+                        font-weight: 700;
+                        line-height: 1.1;
+                        letter-spacing: -0.04em;
+                    ">Verification Results</h2>
+                </div>
+            </div>
+        </div>
+        """).lstrip()
+        
+        components.html(results_header_html, height=200, scrolling=False)
+        
+        # Content wrapper with same max-width - using container
+        with st.container():
+            st.markdown('<div style="max-width: 1200px; margin: 0 auto; padding: 0 4rem 2rem 4rem;">', unsafe_allow_html=True)
+        
+        # Status badge with color
+        status_config = {
+            'TRUE': ('✓ Verified', EnhancedAppConfig.COLORS['success']),
+            'FALSE': ('✗ False', EnhancedAppConfig.COLORS['danger']),
+            'PARTIALLY_TRUE': ('⚠ Partially True', EnhancedAppConfig.COLORS['warning']),
+            'MISLEADING': ('⚠ Misleading', '#D69E2E'),
+            'UNVERIFIED': ('? Unverified', '#718096'),
+            'ERROR': ('Error', '#4A5568')
         }
         
-        icon, color = status_icons.get(result_data['status'], ('UNVERIFIED', '#95A5A6'))
+        status_label, status_color = status_config.get(
+            result_data['status'], 
+            ('Unverified', '#718096')
+        )
         
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Verification Status", f"{icon}")
-        with col2:
-            st.metric("Confidence Level", f"{result_data['confidence']}%")
-        with col3:
-            st.metric("Evidence Found", f"{result_data['evidence_count']} articles")
-        with col4:
-            st.metric("Analysis Time", result_data['timestamp'].split(' ')[1])
+        # Key metrics in elegant cards
+        metrics_html = dedent(f"""
+        <div style="
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+            margin: 2rem 0;
+        ">
+            <div style="
+                background: linear-gradient(135deg, rgba(15, 23, 42, 0.6) 0%, rgba(30, 41, 59, 0.4) 100%);
+                padding: 1.5rem;
+                border-radius: 12px;
+                border: 1px solid rgba(226, 232, 240, 0.1);
+                text-align: center;
+            ">
+                <div style="color: #CBD5E0; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Status</div>
+                <div style="color: {status_color}; font-size: 1.8rem; font-weight: 700;">{status_label}</div>
+            </div>
+            <div style="
+                background: linear-gradient(135deg, rgba(15, 23, 42, 0.6) 0%, rgba(30, 41, 59, 0.4) 100%);
+                padding: 1.5rem;
+                border-radius: 12px;
+                border: 1px solid rgba(226, 232, 240, 0.1);
+                text-align: center;
+            ">
+                <div style="color: #CBD5E0; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Confidence</div>
+                <div style="color: {primary}; font-size: 1.8rem; font-weight: 700;">{result_data['confidence']}%</div>
+            </div>
+            <div style="
+                background: linear-gradient(135deg, rgba(15, 23, 42, 0.6) 0%, rgba(30, 41, 59, 0.4) 100%);
+                padding: 1.5rem;
+                border-radius: 12px;
+                border: 1px solid rgba(226, 232, 240, 0.1);
+                text-align: center;
+            ">
+                <div style="color: #CBD5E0; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Evidence</div>
+                <div style="color: {primary}; font-size: 1.8rem; font-weight: 700;">{result_data['evidence_count']} articles</div>
+            </div>
+            <div style="
+                background: linear-gradient(135deg, rgba(15, 23, 42, 0.6) 0%, rgba(30, 41, 59, 0.4) 100%);
+                padding: 1.5rem;
+                border-radius: 12px;
+                border: 1px solid rgba(226, 232, 240, 0.1);
+                text-align: center;
+            ">
+                <div style="color: #CBD5E0; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Time</div>
+                <div style="color: {primary}; font-size: 1.4rem; font-weight: 700;">{result_data['timestamp'].split(' ')[1] if 'timestamp' in result_data else 'N/A'}</div>
+            </div>
+        </div>
+        """).lstrip()
+        st.markdown(metrics_html, unsafe_allow_html=True)
         
+        st.markdown("")
+        
+        # Evidence status message
         if result_data['evidence_count'] == 0:
-            st.warning("No live evidence found - analysis based on AI knowledge only")
+            st.info("ℹ Analysis based on AI knowledge only - no live evidence found")
         elif result_data['evidence_count'] < 3:
-            st.info("Limited evidence available - consider additional verification")
+            st.info("ℹ Limited evidence available - consider additional verification")
         else:
-            st.success(f"Analyzed {result_data['evidence_count']} recent articles")
+            st.success(f"✓ Analyzed {result_data['evidence_count']} recent articles from trusted sources")
         
-        st.markdown("### Detailed AI Analysis")
-        with st.expander("Click to view full analysis", expanded=True):
-            st.text_area("AI Analysis:", value=result_data['analysis'], height=400, disabled=True)
+        st.markdown("")
         
-        st.markdown("### Evidence Analysis")
+        # Analysis section with elegant styling
+        analysis_header_html = dedent(f"""
+        <div style="
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            margin: 2rem 0 1.5rem 0;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.12);
+        ">
+            <div style="
+                width: 6px;
+                height: 36px;
+                background: linear-gradient(180deg, {primary} 0%, {secondary} 100%);
+                border-radius: 4px;
+                margin-right: 1.5rem;
+                box-shadow: 0 4px 8px rgba(44, 82, 130, 0.3);
+            "></div>
+            <h3 style="
+                color: #E2E8F0;
+                font-size: 1.8rem;
+                font-weight: 600;
+                margin: 0;
+                letter-spacing: -0.02em;
+            ">Analysis</h3>
+            <span style="
+                color: {text_light};
+                font-size: 0.9rem;
+                margin-left: auto;
+                opacity: 0.7;
+            ">Analyzed at {result_data.get('timestamp', 'N/A')}</span>
+        </div>
+        """).lstrip()
+        st.markdown(analysis_header_html, unsafe_allow_html=True)
+        
+        with st.expander("View detailed analysis", expanded=True):
+            st.text_area(
+                "AI Analysis:",
+                value=result_data['analysis'],
+                height=300,
+                disabled=True,
+                label_visibility="collapsed"
+            )
+        
+        st.markdown("")
+        
+        # Evidence section with elegant styling
+        evidence_header_html = dedent(f"""
+        <div style="
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            margin: 2rem 0 1.5rem 0;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.12);
+        ">
+            <div style="
+                width: 6px;
+                height: 36px;
+                background: linear-gradient(180deg, {primary} 0%, {secondary} 100%);
+                border-radius: 4px;
+                margin-right: 1.5rem;
+                box-shadow: 0 4px 8px rgba(44, 82, 130, 0.3);
+            "></div>
+            <h3 style="
+                color: #E2E8F0;
+                font-size: 1.8rem;
+                font-weight: 600;
+                margin: 0;
+                letter-spacing: -0.02em;
+            ">Evidence</h3>
+        </div>
+        """).lstrip()
+        st.markdown(evidence_header_html, unsafe_allow_html=True)
+        
         live_evidence = result_data.get('live_evidence', [])
         
         if not live_evidence:
@@ -791,7 +1232,7 @@ class EnhancedUI:
                 irrelevant = counts.get('irrelevant', 0)
                 total = len(live_evidence)
                 
-                st.markdown("#### Evidence Alignment with Claim")
+                st.markdown("**Evidence Alignment**")
                 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -809,20 +1250,22 @@ class EnhancedUI:
                     import altair as alt
                     
                     chart_data = pd.DataFrame({
-                        'Alignment': ['Supportive', 'Contradictory', 'Irrelevant'],
-                        'Count': [supportive, contradictory, irrelevant],
-                        'Color': ['#2ECC71', '#E74C3C', '#95A5A6']
+                        'Type': ['Supportive', 'Contradictory', 'Irrelevant'],
+                        'Count': [supportive, contradictory, irrelevant]
                     })
                     
                     bar_chart = alt.Chart(chart_data).mark_bar().encode(
-                        x=alt.X('Alignment:N', sort=None),
-                        y=alt.Y('Count:Q'),
-                        color=alt.Color('Alignment:N', scale=alt.Scale(
+                        x=alt.X('Type:N', sort=None, title='Evidence Type', axis=alt.Axis(labelAngle=0)),
+                        y=alt.Y('Count:Q', title='Number of Articles'),
+                        color=alt.Color('Type:N', scale=alt.Scale(
                             domain=['Supportive', 'Contradictory', 'Irrelevant'],
-                            range=['#2ECC71', '#E74C3C', '#95A5A6']
+                            range=[EnhancedAppConfig.COLORS['success'], EnhancedAppConfig.COLORS['danger'], '#718096']
                         ), legend=None),
-                        tooltip=['Alignment', 'Count']
-                    ).properties(height=200, title="Evidence Alignment Distribution")
+                        tooltip=[alt.Tooltip('Type:N', title='Type'), alt.Tooltip('Count:Q', title='Count')]
+                    ).properties(
+                        height=250,
+                        title="Evidence Alignment Distribution"
+                    )
                     
                     st.altair_chart(bar_chart, use_container_width=True)
                     
@@ -835,9 +1278,7 @@ class EnhancedUI:
                     if irrelevant > 0:
                         st.markdown(f"Irrelevant: {'█' * irrelevant} ({irrelevant})")
                 
-                with st.expander("View Detailed Evidence Analysis", expanded=True):
-                    st.markdown("#### Article-by-Article Analysis")
-                    
+                with st.expander("View detailed evidence", expanded=False):
                     sorted_items = sorted(tags_result['items'], 
                                         key=lambda x: ['supportive', 'contradictory', 'irrelevant'].index(x['tag']))
                     
@@ -847,52 +1288,127 @@ class EnhancedUI:
                             article = live_evidence[idx-1]
                             
                             tag_config = {
-                                'supportive': {'label': 'Supports Claim', 'color': '#2ECC71'},
-                                'contradictory': {'label': 'Contradicts Claim', 'color': '#E74C3C'},
-                                'irrelevant': {'label': 'Not Directly Related', 'color': '#95A5A6'}
+                                'supportive': {'label': '✓ Supports', 'color': EnhancedAppConfig.COLORS['success']},
+                                'contradictory': {'label': '✗ Contradicts', 'color': EnhancedAppConfig.COLORS['danger']},
+                                'irrelevant': {'label': '○ Not Related', 'color': '#718096'}
                             }
                             
                             config = tag_config.get(item['tag'], tag_config['irrelevant'])
                             
                             card_html = dedent(f"""
-                            <div style="border-left: 4px solid {config['color']}; padding: 10px; margin: 10px 0; background: #f8f9fa;">
-                                <div style="display: flex; justify-content: space-between; align-items: start;">
-                                    <div style="flex: 1;">
-                                        <strong>{config['label']}</strong><br/>
-                                        <a href="{article['link']}" target="_blank" style="font-size: 14px; color: #0066cc;">{article['title']}</a><br/>
-                                        <small style="color: #666;">
-                                            Source: {article.get('source', 'Unknown')} | 
-                                            Published: {article.get('published', 'Unknown date')}
-                                        </small>
-                                    </div>
+                            <div style="
+                                border-left: 3px solid {config['color']}; 
+                                padding: 12px 16px; 
+                                margin: 12px 0; 
+                                background: #F7FAFC;
+                                border-radius: 4px;
+                            ">
+                                <div style="margin-bottom: 8px;">
+                                    <span style="
+                                        color: {config['color']}; 
+                                        font-weight: 600; 
+                                        font-size: 13px;
+                                    ">{config['label']}</span>
                                 </div>
-                                <div style="margin-top: 8px; font-size: 13px; color: #555;">
-                                    <strong>AI Rationale:</strong> {item['rationale']}
+                                <div style="margin-bottom: 6px;">
+                                    <a href="{article['link']}" target="_blank" style="
+                                        font-size: 15px; 
+                                        color: #2C5282; 
+                                        text-decoration: none;
+                                        font-weight: 500;
+                                    ">{article['title']}</a>
+                                </div>
+                                <div style="font-size: 12px; color: #718096; margin-bottom: 8px;">
+                                    {article.get('source', 'Unknown')} • {article.get('published', 'Unknown date')[:10] if article.get('published') else 'Unknown date'}
+                                </div>
+                                <div style="font-size: 13px; color: #4A5568; margin-top: 8px; padding-top: 8px; border-top: 1px solid #E2E8F0;">
+                                    <strong>Rationale:</strong> {item['rationale']}
                                 </div>
                             </div>
                             """).lstrip()
 
-                            # render card via components.html (height adjusted to approximate content)
-                            components.html(card_html, height=140, scrolling=False)
+                            components.html(card_html, height=160, scrolling=False)
             else:
-                st.success(f"Found {len(live_evidence)} related article(s):")
+                st.markdown(f"**Found {len(live_evidence)} related article(s):**")
                 for e in live_evidence:
-                    pub = e.get('published', '')
-                    source_info = f" ({e.get('source', '')})" if e.get('source') else ""
-                    if pub:
-                        st.markdown(f"- [{e['title']}]({e['link']}){source_info}  \n  <small>{pub}</small>", unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"- [{e['title']}]({e['link']}){source_info}")
+                    pub = e.get('published', '')[:10] if e.get('published') else ''
+                    source_info = f" • {e.get('source', '')}" if e.get('source') else ""
+                    pub_info = f" • {pub}" if pub else ""
+                    st.markdown(f"- [{e['title']}]({e['link']}){source_info}{pub_info}")
 
-        st.markdown("### Recommended Sources for Cross-checking")
+        st.markdown("")
+        
+        # Recommended Sources section with elegant styling
+        sources_header_html = dedent(f"""
+        <div style="
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            margin: 2rem 0 1.5rem 0;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.12);
+        ">
+            <div style="
+                width: 6px;
+                height: 36px;
+                background: linear-gradient(180deg, {primary} 0%, {secondary} 100%);
+                border-radius: 4px;
+                margin-right: 1.5rem;
+                box-shadow: 0 4px 8px rgba(44, 82, 130, 0.3);
+            "></div>
+            <h3 style="
+                color: #E2E8F0;
+                font-size: 1.8rem;
+                font-weight: 600;
+                margin: 0;
+                letter-spacing: -0.02em;
+            ">Recommended Sources</h3>
+        </div>
+        """).lstrip()
+        st.markdown(sources_header_html, unsafe_allow_html=True)
+        st.markdown('<p style="color: #CBD5E0; margin-bottom: 1rem;">For additional verification, check these trusted sources:</p>', unsafe_allow_html=True)
         for s in EnhancedAppConfig.TRUSTED_SOURCES:
-            st.markdown(f"- {s}")
+            st.markdown(f'<p style="color: #CBD5E0; margin: 0.5rem 0;">• {s}</p>', unsafe_allow_html=True)
 
+        st.markdown("")
         EnhancedUI.render_download_section(result_data)
+        
+        # Close the wrapper div
+        st.markdown('</div>', unsafe_allow_html=True)
     
     @staticmethod
     def render_download_section(result_data):
-        st.markdown("### Download Verification Report")
+        primary = EnhancedAppConfig.COLORS["primary"]
+        secondary = EnhancedAppConfig.COLORS["secondary"]
+        
+        # Download section with elegant styling
+        download_header_html = dedent(f"""
+        <div style="
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            margin: 2rem 0 1.5rem 0;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.12);
+        ">
+            <div style="
+                width: 6px;
+                height: 36px;
+                background: linear-gradient(180deg, {primary} 0%, {secondary} 100%);
+                border-radius: 4px;
+                margin-right: 1.5rem;
+                box-shadow: 0 4px 8px rgba(44, 82, 130, 0.3);
+            "></div>
+            <h3 style="
+                color: #E2E8F0;
+                font-size: 1.8rem;
+                font-weight: 600;
+                margin: 0;
+                letter-spacing: -0.02em;
+            ">Download Report</h3>
+        </div>
+        """).lstrip()
+        st.markdown(download_header_html, unsafe_allow_html=True)
         def generate_pdf_report_bytes():
             from io import BytesIO
             from reportlab.lib.pagesizes import A4
@@ -1004,14 +1520,19 @@ def main():
     elif verify_clicked and not news_text.strip():
         st.warning("Please enter some news text to verify.")
     
-    # footer rendered via components.html to avoid markdown code rendering
+    # Clean footer
+    st.markdown("---")
     footer_html = dedent(f"""
-    <div style='text-align: center; color: #7F8C8D; padding: 8px 0 12px 0; font-size: 0.9rem;'>
-        <p><strong>Bharat Fact</strong> • Fighting Misinformation with AI</p>
+    <div style='
+        text-align: center; 
+        color: #718096; 
+        padding: 2rem 0 1rem 0; 
+        font-size: 0.9rem;
+    '>
+        <p style='margin: 0;'><strong>Bharat Fact</strong> • AI-Powered News Verification</p>
     </div>
     """).lstrip()
-    st.markdown("---")
-    components.html(footer_html, height=60, scrolling=False)
+    components.html(footer_html, height=70, scrolling=False)
 
 if __name__ == "__main__":
     main()
