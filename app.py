@@ -259,8 +259,22 @@ def cached_fetch_newsapi(query: str, newsapi_key: str, max_results: int = 8) -> 
         headers = {"User-Agent": "BharatFact/3.0"}
         resp = requests.get(url, params=params, headers=headers, timeout=12)
         if resp.status_code != 200:
+            # Log error details for debugging
+            if resp.status_code == 401:
+                st.warning("NewsAPI: Invalid API key")
+            elif resp.status_code == 429:
+                st.warning("NewsAPI: Rate limit exceeded")
+            else:
+                st.warning(f"NewsAPI: HTTP {resp.status_code}")
             return []
-        data = resp.json()
+        # Check if response has content before parsing JSON
+        if not resp.text or not resp.text.strip():
+            return []
+        try:
+            data = resp.json()
+        except json.JSONDecodeError:
+            st.warning(f"NewsAPI: Invalid JSON response")
+            return []
         articles = data.get('articles', [])[:max_results]
         for article in articles:
             if article.get('title') and article.get('url'):
@@ -272,7 +286,11 @@ def cached_fetch_newsapi(query: str, newsapi_key: str, max_results: int = 8) -> 
                     "api": "NewsAPI"
                 })
     except Exception as e:
-        st.warning(f"NewsAPI fetch failed: {e}")
+        # Suppress common JSON parsing errors (usually means empty/invalid API response)
+        error_str = str(e)
+        if "Expecting value" not in error_str and "JSON" not in error_str:
+            # Only show warning for non-JSON errors (network, auth, etc.)
+            st.warning(f"NewsAPI fetch failed: {e}")
         return []
     return results
 
@@ -810,7 +828,87 @@ class HybridNewsVerifier:
             return
         try:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel("gemini-1.5-flash")
+            
+            # Get list of available models
+            available_models = []
+            try:
+                all_models = list(genai.list_models())
+                for m in all_models:
+                    # Check if model supports generateContent
+                    if hasattr(m, 'supported_generation_methods'):
+                        if 'generateContent' in m.supported_generation_methods:
+                            # Extract model name (remove "models/" prefix)
+                            model_name_full = m.name
+                            if "/" in model_name_full:
+                                short_name = model_name_full.split("/")[-1]
+                            else:
+                                short_name = model_name_full
+                            available_models.append({
+                                'full_name': model_name_full,
+                                'short_name': short_name,
+                                'model_obj': m
+                            })
+            except Exception as e:
+                # If listing fails, we'll try direct creation
+                pass
+            
+            # Priority order: prefer free-tier models that actually exist
+            preferred_short_names = [
+                "gemini-1.5-flash",  # Most common free tier
+                "gemini-1.5-pro",    # Free tier with limits  
+            ]
+            
+            model_name = None
+            
+            # First, try to find preferred models from the available list
+            if available_models:
+                for preferred in preferred_short_names:
+                    for model_info in available_models:
+                        if preferred == model_info['short_name'] or preferred in model_info['full_name']:
+                            # Try to actually create and test the model
+                            try:
+                                test_model = genai.GenerativeModel(model_info['short_name'])
+                                # Do a minimal test to ensure it works
+                                model_name = model_info['short_name']
+                                break
+                            except Exception:
+                                # This model doesn't work, try next
+                                continue
+                    if model_name:
+                        break
+            
+            # If no preferred model found, try any available model
+            if not model_name and available_models:
+                for model_info in available_models:
+                    try:
+                        test_model = genai.GenerativeModel(model_info['short_name'])
+                        model_name = model_info['short_name']
+                        break
+                    except Exception:
+                        continue
+            
+            # Last resort: try direct creation of common models (without listing)
+            if not model_name:
+                for preferred in preferred_short_names:
+                    try:
+                        test_model = genai.GenerativeModel(preferred)
+                        model_name = preferred
+                        break
+                    except Exception:
+                        continue
+            
+            if not model_name:
+                # Build helpful error message
+                error_msg = "No available Gemini models found. "
+                if available_models:
+                    model_list = [m['short_name'] for m in available_models[:5]]
+                    error_msg += f"Available models: {', '.join(model_list)}. "
+                error_msg += "Please check your API key and ensure you have access to Gemini models at https://ai.google.dev/"
+                raise Exception(error_msg)
+            
+            # Create the actual model instance
+            self.model = genai.GenerativeModel(model_name)
+            self.model_name = model_name
             self.is_ready = True
         except Exception as e:
             self.initialization_error = f"Gemini initialization failed: {e}"
@@ -837,15 +935,88 @@ class HybridNewsVerifier:
 
         prompt = self._create_hybrid_prompt(news_claim, live_evidence)
 
-        try:
-            gen = self.model.generate_content(prompt)
-            ai_text = getattr(gen, "text", None) or (
-                gen.get("text") if isinstance(gen, dict) else None
-            )
-            if not ai_text:
-                return self._create_error_response("No response from AI")
-        except Exception as e:
-            return self._create_error_response(f"AI analysis failed: {e}")
+        # Retry logic for rate limits with exponential backoff
+        max_retries = 3
+        retry_delay = 2  # Start with 2 seconds
+        ai_text = None
+        
+        for attempt in range(max_retries):
+            try:
+                gen = self.model.generate_content(prompt)
+                ai_text = getattr(gen, "text", None) or (
+                    gen.get("text") if isinstance(gen, dict) else None
+                )
+                if not ai_text:
+                    return self._create_error_response("No response from AI")
+                break  # Success, exit retry loop
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's a model not found error (404) - handle this first
+                if "404" in error_str and ("not found" in error_str.lower() or "models/" in error_str):
+                    # Model doesn't exist, try to reinitialize with a different model
+                    if attempt == 0:  # Only try alternative models on first attempt
+                        st.warning("Selected model is not available. Trying to find an alternative model...")
+                        try:
+                            # Try to find and use a different model
+                            import google.generativeai as genai
+                            for alt_model in ["gemini-1.5-flash", "gemini-1.5-pro"]:
+                                try:
+                                    alt_gen = genai.GenerativeModel(alt_model)
+                                    alt_response = alt_gen.generate_content(prompt)
+                                    ai_text = getattr(alt_response, "text", None) or (
+                                        alt_response.get("text") if isinstance(alt_response, dict) else None
+                                    )
+                                    if ai_text:
+                                        # Update model for future use
+                                        self.model = alt_gen
+                                        self.model_name = alt_model
+                                        st.success(f"Switched to model: {alt_model}")
+                                        break
+                                except Exception:
+                                    continue
+                            if ai_text:
+                                break  # Success with alternative model
+                            else:
+                                return self._create_error_response(
+                                    f"Model not available. Please check your API key and available models at https://ai.google.dev/. "
+                                    f"Original error: {error_str[:200]}"
+                                )
+                        except Exception as reinit_error:
+                            return self._create_error_response(
+                                f"Model initialization failed. Please check your API key. "
+                                f"Error: {str(reinit_error)[:200]}"
+                            )
+                    else:
+                        # Already tried alternative, give up
+                        return self._create_error_response(
+                            f"Model not available. Please check your API key. Error: {error_str[:200]}"
+                        )
+                # Check if it's a rate limit/quota error (429)
+                elif "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        # Extract retry delay from error if available
+                        import re
+                        delay_match = re.search(r'retry.*?(\d+)', error_str, re.IGNORECASE)
+                        if delay_match:
+                            retry_delay = int(delay_match.group(1)) + 5  # Add buffer
+                        else:
+                            retry_delay = retry_delay * (2 ** attempt)  # Exponential backoff
+                        
+                        st.warning(f"Rate limit hit. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        # Last attempt failed
+                        return self._create_error_response(
+                            f"Rate limit exceeded. Please wait a few minutes and try again. "
+                            f"Error: {error_str[:200]}"
+                        )
+                else:
+                    # Non-rate-limit, non-404 error, don't retry
+                    return self._create_error_response(f"AI analysis failed: {e}")
+        
+        if not ai_text:
+            return self._create_error_response("Failed to get AI response after retries")
 
         result = self._parse_hybrid_response(ai_text, live_evidence)
 
@@ -876,7 +1047,33 @@ class HybridNewsVerifier:
 
         try:
             import google.generativeai as genai
-            model = self.model or genai.GenerativeModel("gemini-1.5-flash")
+            if self.model:
+                model = self.model
+            else:
+                # Fallback: try to use the same model as main verifier
+                if hasattr(self, 'model_name') and self.model_name:
+                    try:
+                        model = genai.GenerativeModel(self.model_name)
+                    except Exception:
+                        # If stored model name doesn't work, try common ones
+                        for model_name in ["gemini-1.5-flash", "gemini-1.5-pro"]:
+                            try:
+                                model = genai.GenerativeModel(model_name)
+                                break
+                            except Exception:
+                                continue
+                        if 'model' not in locals():
+                            raise Exception("No available model")
+                else:
+                    # Try common free-tier models (removed gemini-pro)
+                    for model_name in ["gemini-1.5-flash", "gemini-1.5-pro"]:
+                        try:
+                            model = genai.GenerativeModel(model_name)
+                            break
+                        except Exception:
+                            continue
+                    if 'model' not in locals():
+                        raise Exception("No available model")
         except Exception:
             return {
                 "items": [],
@@ -907,18 +1104,30 @@ Return STRICT JSON like:
 ]
 """
 
-        try:
-            response = model.generate_content(prompt)
-            raw = getattr(response, "text", "")
-        except Exception:
-            return {
-                "items": [],
-                "counts": {
-                    "supportive": 0,
-                    "contradictory": 0,
-                    "irrelevant": 0
+        # Retry logic for rate limits
+        max_retries = 2
+        retry_delay = 2
+        raw = ""
+        
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(prompt)
+                raw = getattr(response, "text", "")
+                break  # Success
+            except Exception as e:
+                error_str = str(e)
+                if ("429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower()) and attempt < max_retries - 1:
+                    time.sleep(retry_delay * (2 ** attempt))
+                    continue
+                # If not rate limit or last attempt, return empty
+                return {
+                    "items": [],
+                    "counts": {
+                        "supportive": 0,
+                        "contradictory": 0,
+                        "irrelevant": 0
+                    }
                 }
-            }
 
         data = extract_first_json(raw)
 
