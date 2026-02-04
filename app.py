@@ -18,6 +18,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import time
+from requests.exceptions import RequestException, Timeout
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -66,15 +69,35 @@ class EnhancedAppConfig:
 # UTILITIES
 # =========================
 
-def safe_requests_get(url: str, headers: dict = None, timeout: int = 10):
-    """Simple wrapper with basic exception handling for requests.get"""
+def safe_requests_get(
+    url: str,
+    headers: dict = None,
+    timeout: int = 10,
+    retries: int = 3,
+    backoff_factor: float = 1.0,
+):
+    """
+    Robust HTTP GET with retries and exponential backoff.
+    Backoff pattern: 1s → 2s → 4s
+    """
     headers = headers or {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64)'}
-    try:
-        resp = requests.get(url, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-        return resp
-    except Exception:
-        return None
+
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+
+            # Retry on server-side errors
+            if resp.status_code >= 500:
+                raise RequestException(f"Server error: {resp.status_code}")
+
+            resp.raise_for_status()
+            return resp
+
+        except (RequestException, Timeout):
+            if attempt == retries - 1:
+                return None
+            time.sleep(backoff_factor * (2 ** attempt))
+
 
 def extract_first_json(text: str):
     """Attempt to find and parse the first JSON object/array in text."""
