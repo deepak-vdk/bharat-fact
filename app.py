@@ -1,19 +1,19 @@
 """
-🇮🇳 INDIAN NEWS VERIFIER - HYBRID (AI + Live News Feeds)
-Date: 2025-11-05
-Author: deepak
-Notes:
-- Uses multiple real-time news APIs + Gemini analysis
-- Combines live evidence with AI reasoning
+Bharat Fact - Indian News Verifier (final)
+Patched: render header/footer/article cards via streamlit.components.v1.html to avoid raw-code display.
+Date: 2025-11-05 (final)
+Author: Deepak (patched by assistant)
 """
 
 import os
 import re
-import time
-from datetime import datetime, timedelta
 import json
+from datetime import datetime, timedelta
+from typing import List, Dict, Any
+from textwrap import dedent
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,7 +25,7 @@ from bs4 import BeautifulSoup
 # ENHANCED CONFIG
 # =========================
 
-def get_api_key(service_name):
+def get_api_key(service_name: str) -> str:
     """Get API keys from Streamlit secrets or environment."""
     try:
         if isinstance(st.secrets, dict) and f"{service_name}_API_KEY" in st.secrets:
@@ -38,8 +38,9 @@ class EnhancedAppConfig:
     GEMINI_API_KEY = get_api_key("GEMINI")
     NEWSAPI_API_KEY = get_api_key("NEWSAPI")
     
-    APP_TITLE = "🇮🇳 Indian News Verifier - Hybrid AI"
+    APP_TITLE = "Bharat Fact"
     VERSION = "3.0"
+    AUTHOR_CREDIT = "Deepak"
 
     COLORS = {
         'primary': '#FF6B35',
@@ -62,42 +63,234 @@ class EnhancedAppConfig:
     ]
 
 # =========================
-# ORIGINAL UI COMPONENTS (Keep the same interface)
+# UTILITIES
+# =========================
+
+def safe_requests_get(url: str, headers: dict = None, timeout: int = 10):
+    """Simple wrapper with basic exception handling for requests.get"""
+    headers = headers or {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64)'}
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        return resp
+    except Exception:
+        return None
+
+def extract_first_json(text: str):
+    """Attempt to find and parse the first JSON object/array in text."""
+    if not text or not isinstance(text, str):
+        return None
+    m = re.search(r'(\[.*\]|\{.*\})', text, flags=re.DOTALL)
+    if not m:
+        return None
+    candidate = m.group(1)
+    for trim_end in range(len(candidate), 0, -1):
+        try:
+            part = candidate[:trim_end]
+            parsed = json.loads(part)
+            return parsed
+        except Exception:
+            continue
+    try:
+        return json.loads(candidate)
+    except Exception:
+        return None
+
+def _safe_filename(s: str, maxlen: int = 50) -> str:
+    if not s:
+        return "fact_check"
+    s = re.sub(r'[^\w\s-]', '', s)
+    s = re.sub(r'\s+', '_', s).strip('_')
+    return s[:maxlen] or "fact_check"
+
+# =========================
+# CACHED TOP-LEVEL FETCH HELPERS
+# =========================
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_fetch_google_news_rss(query: str, max_results: int = 8) -> List[Dict[str, Any]]:
+    results = []
+    try:
+        if not query or not query.strip():
+            return results
+        q = query.strip().replace(" ", "+")
+        trusted_sites = [
+            "ndtv.com", "thehindu.com", "indiatoday.in", "indiatimes.com",
+            "indianexpress.com", "boomlive.in", "altnews.in", "thequint.com",
+            "firstpost.com", "news18.com", "republicworld.com"
+        ]
+        site_part = "+OR+".join([f"site:{s}" for s in trusted_sites])
+        rss_url = f"https://news.google.com/rss/search?q={q}+({site_part})&hl=en-IN&gl=IN&ceid=IN:en"
+        resp = safe_requests_get(rss_url, timeout=10)
+        if resp is None:
+            return []
+        soup = BeautifulSoup(resp.content, "xml")
+        items = soup.find_all("item")[:max_results]
+        for item in items:
+            title = item.title.text if item.title else ""
+            link = item.link.text if item.link else ""
+            pub = item.pubDate.text if item.pubDate else ""
+            source = item.source.text if item.source else ""
+            if title and link:
+                results.append({
+                    "title": title.strip(),
+                    "link": link.strip(),
+                    "published": pub,
+                    "source": source,
+                    "api": "Google News RSS"
+                })
+    except Exception:
+        return []
+    return results
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_fetch_newsapi(query: str, newsapi_key: str, max_results: int = 8) -> List[Dict[str, Any]]:
+    results = []
+    if not newsapi_key:
+        return results
+    try:
+        if not query or not query.strip():
+            return results
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            'q': query,
+            'language': 'en',
+            'sortBy': 'relevancy',
+            'pageSize': max_results,
+            'apiKey': newsapi_key,
+            'from': (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        }
+        headers = {"User-Agent": "BharatFact/3.0"}
+        resp = requests.get(url, params=params, headers=headers, timeout=12)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        articles = data.get('articles', [])[:max_results]
+        for article in articles:
+            if article.get('title') and article.get('url'):
+                results.append({
+                    "title": article['title'],
+                    "link": article['url'],
+                    "published": article.get('publishedAt', ''),
+                    "source": article.get('source', {}).get('name', ''),
+                    "api": "NewsAPI"
+                })
+    except Exception:
+        return []
+    return results
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_fetch_gdelt(query: str, max_results: int = 6) -> List[Dict[str, Any]]:
+    results = []
+    try:
+        if not query or not query.strip():
+            return results
+        gdelt_url = "https://api.gdeltproject.org/api/v2/doc/doc"
+        params = {
+            'query': f'{query} sourcecountry:IN',
+            'mode': 'artlist',
+            'format': 'json',
+            'maxrecords': max_results
+        }
+        resp = requests.get(gdelt_url, params=params, timeout=15)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        articles = data.get('articles', [])[:max_results]
+        for article in articles:
+            results.append({
+                "title": article.get('title', ''),
+                "link": article.get('url', ''),
+                "published": article.get('seendate', ''),
+                "source": article.get('domain', ''),
+                "api": "GDELT"
+            })
+    except Exception:
+        return []
+    return results
+
+# =========================
+# ORIGINAL UI COMPONENTS (Keep the same interface, professional wording)
 # =========================
 
 class BeautifulUI:
     @staticmethod
     def setup_page_config():
-        st.set_page_config(page_title=EnhancedAppConfig.APP_TITLE, page_icon="🇮🇳", layout="wide", initial_sidebar_state="collapsed")
-        hide_style = """
+        # no emoji in page icon
+        try:
+            st.set_page_config(page_title=EnhancedAppConfig.APP_TITLE, page_icon="", layout="wide", initial_sidebar_state="collapsed")
+        except Exception:
+            # ignore if already set
+            pass
+        hide_style = dedent("""
         <style>
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
         </style>
-        """
+        """).lstrip()
         st.markdown(hide_style, unsafe_allow_html=True)
 
     @staticmethod
     def render_header():
-        st.markdown(f"""
-        <div style='text-align: center; padding: 2rem 0;'>
-            <h1 style='color: {EnhancedAppConfig.COLORS["primary"]}; font-size: 3rem; margin-bottom: 0;'>🇮🇳 Indian News Verifier</h1>
-            <p style='color: {EnhancedAppConfig.COLORS["secondary"]}; font-size: 1.1rem; margin-top: 0;'>AI-Powered Fake News Detection • Advanced AI Technology</p>
-            <hr style='width: 50%; margin: 1.5rem auto; border: 2px solid {EnhancedAppConfig.COLORS["primary"]};'>
+        # Centered, compact and professional header rendered via components.html
+        primary = EnhancedAppConfig.COLORS["primary"]
+        secondary = EnhancedAppConfig.COLORS["secondary"]
+        author = EnhancedAppConfig.AUTHOR_CREDIT
+
+        html = dedent(f"""
+        <div style="
+            max-width: 900px;
+            margin: 12px auto 18px auto;
+            text-align: center;
+            padding: 6px 16px;
+        ">
+            <h1 style="
+                color: {primary};
+                font-size: 2.2rem;
+                margin: 0;
+                font-weight: 700;
+                line-height: 1.1;
+                letter-spacing: -0.5px;
+            ">{EnhancedAppConfig.APP_TITLE}</h1>
+
+            <p style="
+                color: {secondary};
+                font-size: 1rem;
+                margin: 8px 0 4px 0;
+            ">AI-powered fact checking and verification</p>
+
+            <p style="
+                color: #7F8C8D;
+                font-size: 0.85rem;
+                margin: 4px 0 10px 0;
+            ">Author: {author}</p>
+
+            <hr style="
+                border: none;
+                height: 2px;
+                background: {primary};
+                margin-top: 8px;
+                opacity: 0.12;
+            " />
         </div>
-        """, unsafe_allow_html=True)
+        """).lstrip()
+
+        # Use components.html to ensure raw HTML is injected (avoids markdown interpreting it)
+        components.html(html, height=140, scrolling=False)
 
     @staticmethod
     def render_sidebar():
         with st.sidebar:
-            st.markdown("### 🛠️ How It Works")
-            st.markdown("1. Enter news\n2. AI analysis\n3. Cross-check with trusted sources")
+            st.markdown("### How It Works")
+            st.markdown("1. Enter the news claim or article URL")
+            st.markdown("2. AI-assisted analysis")
+            st.markdown("3. Cross-check with trusted sources")
             st.markdown("---")
-            st.markdown("### ⚠️ Note")
+            st.markdown("### Note")
             st.markdown("This tool assists verification. Always cross-check important claims.")
             st.markdown("---")
-            st.markdown(f"**Version {EnhancedAppConfig.VERSION}** 🇮🇳")
+            st.markdown(f"**Version {EnhancedAppConfig.VERSION}**")
 
     @staticmethod
     def valid_url(url: str) -> bool:
@@ -120,8 +313,9 @@ class BeautifulUI:
 
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64)'}
-            resp = requests.get(url, headers=headers, timeout=8)
-            resp.raise_for_status()
+            resp = safe_requests_get(url, headers=headers, timeout=8)
+            if not resp:
+                return ""
             content_type = resp.headers.get('Content-Type', '')
             if 'text/html' not in content_type:
                 return ""
@@ -143,36 +337,36 @@ class BeautifulUI:
         if 'clear_counter' not in st.session_state:
             st.session_state.clear_counter = 0
 
-        st.markdown("### 📝 Enter News to Verify")
-        input_method = st.radio("Choose input method:", ["✏️ Type/Paste Text", "🔗 News URL"], horizontal=True)
+        st.markdown("### Enter News to Verify")
+        input_method = st.radio("Choose input method:", ["Type/Paste Text", "News URL"], horizontal=True)
         news_text = ""
 
-        if input_method == "✏️ Type/Paste Text":
+        if input_method == "Type/Paste Text":
             key = f"news_input_{st.session_state.clear_counter}"
-            news_text = st.text_area("Enter the news claim:", height=150, placeholder="Example: PM Modi announced new education policy today...", key=key)
+            news_text = st.text_area("Enter the news claim:", height=150, placeholder="Example: The government announced a new education policy today...", key=key)
         else:
             url_key = f"url_input_{st.session_state.clear_counter}"
             url = st.text_input("Enter news article URL:", placeholder="https://example.com/news-article", key=url_key)
             if url:
                 if BeautifulUI.valid_url(url):
-                    with st.spinner("🔎 Extracting text from URL..."):
+                    with st.spinner("Extracting text from URL..."):
                         text = BeautifulUI.extract_text_from_url(url)
                         if text:
                             news_text = text
-                            st.success("✅ Text extracted successfully (truncated).")
+                            st.success("Text extracted successfully (truncated).")
                             st.text_area("Extracted text (truncated):", value=news_text, height=120, disabled=True)
                         else:
-                            st.error("❌ Could not extract usable text from the URL. Try another source or paste text manually.")
+                            st.error("Could not extract usable text from the URL. Try another source or paste text manually.")
                 else:
-                    st.warning("⚠️ Please enter a valid URL starting with http:// or https://")
+                    st.warning("Please enter a valid URL starting with http:// or https://")
 
         col1, col2, col3 = st.columns([2, 2, 3])
         with col1:
-            verify_clicked = st.button("🔍 Verify News", type="primary")
+            verify_clicked = st.button("Verify News", type="primary")
         with col2:
-            example_clicked = st.button("🧪 Try Example")
+            example_clicked = st.button("Try Example")
         with col3:
-            clear_clicked = st.button("🔄 Clear")
+            clear_clicked = st.button("Clear")
             if clear_clicked:
                 st.session_state.clear_counter += 1
                 for k in ["last_query"]:
@@ -193,162 +387,52 @@ class LiveNewsFetcher:
     def __init__(self):
         self.newsapi_key = EnhancedAppConfig.NEWSAPI_API_KEY
     
-    @st.cache_data(ttl=1800)  # 30 minutes cache
-    def fetch_google_news_rss(_self, query: str, max_results: int = 8):
-        """Enhanced Google News RSS with better Indian sources."""
-        if not query or not query.strip():
-            return []
-        
-        q = query.strip().replace(" ", "+")
-        trusted_sites = [
-            "ndtv.com", "thehindu.com", "indiatoday.in", "indiatimes.com",
-            "indianexpress.com", "boomlive.in", "altnews.in", "thequint.com",
-            "firstpost.com", "news18.com", "republicworld.com"
-        ]
-        
-        site_part = "+OR+".join([f"site:{s}" for s in trusted_sites])
-        rss_url = f"https://news.google.com/rss/search?q={q}+({site_part})&hl=en-IN&gl=IN&ceid=IN:en"
-        
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            resp = requests.get(rss_url, headers=headers, timeout=10)
-            resp.raise_for_status()
-            
-            soup = BeautifulSoup(resp.content, "xml")
-            items = soup.find_all("item")[:max_results]
-            
-            results = []
-            for item in items:
-                title = item.title.text if item.title else ""
-                link = item.link.text if item.link else ""
-                pub = item.pubDate.text if item.pubDate else ""
-                source = item.source.text if item.source else ""
-                
-                if title and link:
-                    results.append({
-                        "title": title.strip(),
-                        "link": link.strip(),
-                        "published": pub,
-                        "source": source,
-                        "api": "Google News RSS"
-                    })
-            return results
-        except Exception as e:
-            st.error(f"Google News RSS error: {e}")
-            return []
+    def fetch_google_news_rss(self, query: str, max_results: int = 8):
+        return cached_fetch_google_news_rss(query, max_results=max_results)
     
-    @st.cache_data(ttl=1800)
-    def fetch_newsapi(_self, query: str, max_results: int = 8):
-        """Fetch from NewsAPI with Indian focus."""
-        if not _self.newsapi_key:
-            return []
-        
-        try:
-            # NewsAPI with Indian sources and language filter
-            url = "https://newsapi.org/v2/everything"
-            params = {
-                'q': query,
-                'language': 'en',
-                'sortBy': 'relevancy',
-                'pageSize': max_results,
-                'apiKey': _self.newsapi_key,
-                'from': (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')  # Last 30 days
-            }
-            
-            headers = {"User-Agent": "IndianNewsVerifier/3.0"}
-            resp = requests.get(url, params=params, headers=headers, timeout=10)
-            
-            if resp.status_code != 200:
-                return []
-            
-            data = resp.json()
-            articles = data.get('articles', [])[:max_results]
-            
-            results = []
-            for article in articles:
-                if article.get('title') and article.get('url'):
-                    results.append({
-                        "title": article['title'],
-                        "link": article['url'],
-                        "published": article.get('publishedAt', ''),
-                        "source": article.get('source', {}).get('name', ''),
-                        "api": "NewsAPI"
-                    })
-            return results
-        except Exception as e:
-            st.error(f"NewsAPI error: {e}")
-            return []
+    def fetch_newsapi(self, query: str, max_results: int = 8):
+        return cached_fetch_newsapi(query, newsapi_key=self.newsapi_key, max_results=max_results)
     
-    @st.cache_data(ttl=1800)
-    def fetch_gdelt(_self, query: str, max_results: int = 6):
-        """Fetch from GDELT Project for global coverage including Indian media."""
-        try:
-            # GDELT GKG API - simplified version
-            gdelt_url = "https://api.gdeltproject.org/api/v2/doc/doc"
-            params = {
-                'query': f'{query} sourcecountry:IN',
-                'mode': 'artlist',
-                'format': 'json',
-                'maxrecords': max_results
-            }
-            
-            resp = requests.get(gdelt_url, params=params, timeout=15)
-            if resp.status_code != 200:
-                return []
-            
-            data = resp.json()
-            articles = data.get('articles', [])[:max_results]
-            
-            results = []
-            for article in articles:
-                results.append({
-                    "title": article.get('title', ''),
-                    "link": article.get('url', ''),
-                    "published": article.get('seendate', ''),
-                    "source": article.get('domain', ''),
-                    "api": "GDELT"
-                })
-            return results
-        except Exception:
-            # GDELT can be unstable, fail gracefully
-            return []
+    def fetch_gdelt(self, query: str, max_results: int = 6):
+        return cached_fetch_gdelt(query, max_results=max_results)
     
     def fetch_all_news_sources(self, query: str, max_total: int = 15):
-        """Fetch from all available news sources in parallel."""
-        if not query.strip():
+        if not query or not query.strip():
             return []
-        
-        # Run all fetchers
-        with st.spinner("🔍 Searching live news sources..."):
+        with st.spinner("Searching live news sources..."):
             all_results = []
-            
-            # Google News RSS (most reliable for Indian sources)
-            google_results = self.fetch_google_news_rss(query, max_results=8)
+            google_results = []
+            try:
+                google_results = self.fetch_google_news_rss(query, max_results=8) or []
+            except Exception:
+                google_results = []
             all_results.extend(google_results)
-            
-            # NewsAPI (if available)
             if self.newsapi_key:
-                newsapi_results = self.fetch_newsapi(query, max_results=6)
-                all_results.extend(newsapi_results)
-            
-            # GDELT (global coverage)
-            gdelt_results = self.fetch_gdelt(query, max_results=4)
-            all_results.extend(gdelt_results)
-        
-        # Remove duplicates by URL
-        seen_urls = set()
-        unique_results = []
-        
-        for result in all_results:
-            url = result['link']
-            if url not in seen_urls:
-                seen_urls.add(url)
-                unique_results.append(result)
-        
-        return unique_results[:max_total]
+                try:
+                    newsapi_results = self.fetch_newsapi(query, max_results=6) or []
+                    all_results.extend(newsapi_results)
+                except Exception:
+                    pass
+            try:
+                gdelt_results = self.fetch_gdelt(query, max_results=4) or []
+                all_results.extend(gdelt_results)
+            except Exception:
+                pass
+
+        # Deduplicate by link
+        seen = set()
+        unique = []
+        for r in all_results:
+            link = (r.get('link') or '').strip()
+            if not link:
+                continue
+            if link not in seen:
+                seen.add(link)
+                unique.append(r)
+        return unique[:max_total]
 
 # =========================
-# ENHANCED HYBRID VERIFIER
+# HYBRID NEWS VERIFIER
 # =========================
 
 class HybridNewsVerifier:
@@ -360,93 +444,90 @@ class HybridNewsVerifier:
         self._setup_gemini_ai()
     
     def _setup_gemini_ai(self):
-        """Configure Gemini AI client."""
         try:
             import google.generativeai as genai
-            
-            api_key = EnhancedAppConfig.GEMINI_API_KEY
-            if not api_key:
-                self.initialization_error = "No GEMINI_API_KEY found"
-                return
-            
+        except Exception as e:
+            self.initialization_error = f"Gemini SDK import failed: {e}"
+            return
+
+        api_key = EnhancedAppConfig.GEMINI_API_KEY
+        if not api_key:
+            self.initialization_error = "No GEMINI_API_KEY found"
+            return
+
+        try:
             genai.configure(api_key=api_key)
-            
-            # Build a robust candidate list: known-stable + discovered
-            known_models = ['gemini-1.5-flash', 'gemini-1.5-pro']
-            discovered = []
+        except Exception as e:
+            self.initialization_error = f"Gemini configure failed: {e}"
+            return
+
+        known_models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.5-mini', 'gemini-1.0']
+        init_errors = []
+        for model_name in known_models:
             try:
-                for m in genai.list_models():
-                    supported = getattr(m, 'supported_generation_methods', []) or []
-                    if 'generateContent' in supported:
-                        name = getattr(m, 'name', '')
-                        if name:
-                            discovered.append(name.split('/')[-1])
-            except Exception:
-                pass
-
-            # Deduplicate while preserving order
-            model_names = []
-            seen = set()
-            for nm in known_models + discovered:
-                if nm and nm not in seen:
-                    seen.add(nm)
-                    model_names.append(nm)
-
-            init_errors = []
-            for model_name in model_names:
+                model = genai.GenerativeModel(model_name)
                 try:
-                    self.model = genai.GenerativeModel(model_name)
-                    # Quick test
-                    response = self.model.generate_content("hello")
-                    if getattr(response, 'text', None):
+                    gen = model.generate_content("Hello")
+                    text = getattr(gen, 'text', None) or (gen.get('text') if isinstance(gen, dict) else None)
+                    if text:
+                        self.model = model
                         self.is_ready = True
-                        break
+                        return
                 except Exception as e:
                     init_errors.append(f"{model_name}: {e}")
                     continue
-            
-            if not self.is_ready:
-                detail = "\n".join(init_errors[:6]) if 'init_errors' in locals() and init_errors else "No models responded"
-                self.initialization_error = f"Could not initialize Gemini model. Details: {detail}"
-                
-        except Exception as e:
-            self.initialization_error = f"Gemini setup failed: {str(e)}"
-    
+            except Exception as e:
+                init_errors.append(f"{model_name}: {e}")
+                continue
+
+        try:
+            listed = []
+            for m in genai.list_models():
+                name = getattr(m, 'name', None) or (m.get('name') if isinstance(m, dict) else None)
+                if name:
+                    listed.append(name.split('/')[-1])
+            for nm in listed:
+                if nm in known_models:
+                    continue
+                try:
+                    model = genai.GenerativeModel(nm)
+                    gen = model.generate_content("Hello")
+                    text = getattr(gen, 'text', None) or (gen.get('text') if isinstance(gen, dict) else None)
+                    if text:
+                        self.model = model
+                        self.is_ready = True
+                        return
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        self.initialization_error = "Could not initialize Gemini model. " + ("; ".join(init_errors[:6]) if init_errors else "")
+
     def verify_news(self, news_claim: str):
-        """Hybrid verification: Fetch live evidence + AI analysis."""
         if not self.is_ready:
             return self._create_error_response(self.initialization_error or "AI engine not ready")
-        
-        # Step 1: Fetch live news evidence
-        live_evidence = self.news_fetcher.fetch_all_news_sources(news_claim)
-        
-        # Step 2: Create enhanced prompt with live evidence
-        prompt = self._create_hybrid_prompt(news_claim, live_evidence)
-        
+
+        live_evidence = []
         try:
-            import google.generativeai as genai
+            live_evidence = self.news_fetcher.fetch_all_news_sources(news_claim)
         except Exception:
-            return self._create_error_response("AI client library not available")
-        
+            live_evidence = []
+
+        prompt = self._create_hybrid_prompt(news_claim, live_evidence)
+
         try:
-            # Generate analysis
-            response = self.model.generate_content(prompt)
-            ai_text = response.text
-            
+            gen = self.model.generate_content(prompt)
+            ai_text = getattr(gen, 'text', None) or (gen.get('text') if isinstance(gen, dict) else None)
             if not ai_text:
                 return self._create_error_response("No response from AI")
-            
-            # Parse response with live evidence context
-            return self._parse_hybrid_response(ai_text, live_evidence)
-            
         except Exception as e:
             return self._create_error_response(f"AI analysis failed: {e}")
 
+        return self._parse_hybrid_response(ai_text, live_evidence)
+
     @st.cache_data(show_spinner=False)
     def tag_evidence_support(_self, news_claim: str, live_evidence: list):
-        """Classify each evidence headline as supportive, contradictory, or irrelevant using Gemini.
-        Returns list of {index, title, tag, rationale} and counts per tag.
-        """
         try:
             import google.generativeai as genai
         except Exception:
@@ -455,7 +536,6 @@ class HybridNewsVerifier:
         if not live_evidence:
             return {"items": [], "counts": {"supportive": 0, "contradictory": 0, "irrelevant": 0}}
 
-        # Prepare headline list with indices
         lines = []
         for idx, art in enumerate(live_evidence, 1):
             title = art.get('title', '').strip()
@@ -484,66 +564,59 @@ For each headline, decide:
 Return STRICT JSON (array) with objects: {{"index": <int>, "tag": "supportive|contradictory|irrelevant", "rationale": "short reason"}}. No extra text.
 """
 
+        model = _self.model if _self and getattr(_self, 'model', None) else None
         try:
-            model = _self.model if _self and getattr(_self, 'model', None) else None
             if not model:
-                # Fallback: create a short-lived model client
                 model = genai.GenerativeModel('gemini-1.5-flash')
             gen = model.generate_content(instruction)
-            raw = getattr(gen, 'text', '') or ''
+            raw = getattr(gen, 'text', '') or (gen.get('text') if isinstance(gen, dict) else '')
         except Exception:
             return {"items": [], "counts": {"supportive": 0, "contradictory": 0, "irrelevant": 0}}
 
-        # Parse JSON safely
+        data = extract_first_json(raw)
         items = []
-        try:
-            data = json.loads(raw)
-            if isinstance(data, list):
-                for obj in data:
-                    try:
-                        idx = int(obj.get('index'))
-                        tag = str(obj.get('tag', '')).strip().lower()
-                        rationale = str(obj.get('rationale', '')).strip()
-                        if tag not in ("supportive", "contradictory", "irrelevant"):
-                            tag = "irrelevant"
-                        title = live_evidence[idx-1]['title'] if 1 <= idx <= len(live_evidence) else ''
-                        items.append({"index": idx, "title": title, "tag": tag, "rationale": rationale})
-                    except Exception:
-                        continue
-        except Exception:
-            items = []
+        if isinstance(data, list):
+            for obj in data:
+                try:
+                    idx = int(obj.get('index'))
+                    tag = str(obj.get('tag', '')).strip().lower()
+                    rationale = str(obj.get('rationale', '')).strip()
+                    if tag not in ("supportive", "contradictory", "irrelevant"):
+                        tag = "irrelevant"
+                    title = live_evidence[idx-1]['title'] if 1 <= idx <= len(live_evidence) else ''
+                    items.append({"index": idx, "title": title, "tag": tag, "rationale": rationale})
+                except Exception:
+                    continue
 
         counts = {"supportive": 0, "contradictory": 0, "irrelevant": 0}
         for it in items:
             counts[it['tag']] = counts.get(it['tag'], 0) + 1
 
         return {"items": items, "counts": counts}
-    
+
     def _create_hybrid_prompt(self, news_claim: str, live_evidence: list):
-        """Create prompt that includes live news evidence."""
-        
-        # Format live evidence for the prompt
         evidence_text = ""
         if live_evidence:
             evidence_text = "LIVE NEWS EVIDENCE FOUND:\n"
-            for i, article in enumerate(live_evidence[:8], 1):  # Top 8 articles
-                evidence_text += f"{i}. {article['title']}\n"
+            for i, article in enumerate(live_evidence[:8], 1):
+                evidence_text += f"{i}. {article.get('title','')}\n"
                 if article.get('source'):
-                    evidence_text += f"   Source: {article['source']}\n"
+                    evidence_text += f"   Source: {article.get('source')}\n"
                 if article.get('published'):
-                    evidence_text += f"   Published: {article['published']}\n"
-                evidence_text += f"   URL: {article['link']}\n\n"
+                    evidence_text += f"   Published: {article.get('published')}\n"
+                evidence_text += f"   URL: {article.get('link')}\n\n"
         else:
             evidence_text = "LIVE NEWS EVIDENCE: No recent articles found from trusted sources.\n"
         
         return f"""
-🇮🇳 INDIAN NEWS FACT-CHECK ANALYSIS WITH LIVE EVIDENCE
+Bharat Fact - INDIAN NEWS FACT-CHECK ANALYSIS WITH LIVE EVIDENCE
 ========================================================
 
 You are an expert Indian news fact-checker. Analyze the claim below using both your knowledge and the provided live news evidence from trusted sources.
 
 NEWS CLAIM TO VERIFY:
 \"\"\"{news_claim}\"\"\"
+
 
 {evidence_text}
 
@@ -574,14 +647,12 @@ RED_FLAGS:
 RECOMMENDATION:
 [Final assessment and advice for readers]
 """
-    
+
     def _parse_hybrid_response(self, ai_text: str, live_evidence: list):
-        """Parse AI response with live evidence context."""
         status = "UNVERIFIED"
         confidence = 50
-        txt = ai_text.upper()
+        txt = ai_text.upper() if isinstance(ai_text, str) else ""
         
-        # Status extraction
         status_patterns = [
             ("VERIFICATION_STATUS: TRUE", "TRUE"),
             ("VERIFICATION_STATUS: FALSE", "FALSE"), 
@@ -595,8 +666,7 @@ RECOMMENDATION:
                 status = status_val
                 break
         
-        # Confidence extraction
-        m = re.search(r'CONFIDENCE_SCORE:\s*([0-9]{1,3})', ai_text, flags=re.IGNORECASE)
+        m = re.search(r'CONFIDENCE_SCORE:\s*([0-9]{1,3})', ai_text, flags=re.IGNORECASE) if isinstance(ai_text, str) else None
         if m:
             try:
                 extracted = int(m.group(1))
@@ -604,9 +674,8 @@ RECOMMENDATION:
             except Exception:
                 pass
         
-        # Adjust confidence based on evidence availability
         if not live_evidence and confidence > 50:
-            confidence = max(30, confidence - 20)  # Penalize when no evidence
+            confidence = max(30, confidence - 20)
         
         return {
             "status": status,
@@ -623,7 +692,7 @@ RECOMMENDATION:
         return {
             "status": "ERROR",
             "confidence": 0,
-            "analysis": f"❌ {msg}",
+            "analysis": f"ERROR: {msg}",
             "live_evidence": [],
             "evidence_count": 0,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -632,7 +701,7 @@ RECOMMENDATION:
         }
 
 # =========================
-# ENHANCED RESULTS DISPLAY (Keep UI same but with enhanced data)
+# ENHANCED RESULTS DISPLAY
 # =========================
 
 class EnhancedUI:
@@ -642,58 +711,56 @@ class EnhancedUI:
             st.error(result_data.get('analysis', 'Unknown error'))
             return
         
-        st.markdown("### 📊 Verification Results")
+        st.markdown("### Verification Results")
         
-        # Status with evidence context - using same UI as before
         status_icons = {
-            'TRUE': ('🟢', EnhancedAppConfig.COLORS['success']),
-            'FALSE': ('🔴', EnhancedAppConfig.COLORS['danger']),
-            'PARTIALLY_TRUE': ('🟡', EnhancedAppConfig.COLORS['warning']),
-            'MISLEADING': ('🟠', '#E67E22'),
-            'UNVERIFIED': ('⚪', '#95A5A6'),
-            'ERROR': ('⚫', '#34495E')
+            'TRUE': ('TRUE', EnhancedAppConfig.COLORS['success']),
+            'FALSE': ('FALSE', EnhancedAppConfig.COLORS['danger']),
+            'PARTIALLY_TRUE': ('PARTIALLY_TRUE', EnhancedAppConfig.COLORS['warning']),
+            'MISLEADING': ('MISLEADING', '#E67E22'),
+            'UNVERIFIED': ('UNVERIFIED', '#95A5A6'),
+            'ERROR': ('ERROR', '#34495E')
         }
         
-        icon, color = status_icons.get(result_data['status'], ('⚪', '#95A5A6'))
+        icon, color = status_icons.get(result_data['status'], ('UNVERIFIED', '#95A5A6'))
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("📊 Verification Status", f"{icon} {result_data['status']}")
+            st.metric("Verification Status", f"{icon}")
         with col2:
-            st.metric("🎯 Confidence Level", f"{result_data['confidence']}%")
+            st.metric("Confidence Level", f"{result_data['confidence']}%")
         with col3:
-            st.metric("📰 Evidence Found", f"{result_data['evidence_count']} articles")
+            st.metric("Evidence Found", f"{result_data['evidence_count']} articles")
         with col4:
-            st.metric("⏰ Analysis Time", result_data['timestamp'].split(' ')[1])
+            st.metric("Analysis Time", result_data['timestamp'].split(' ')[1])
         
-        # Confidence indicator with evidence context
         if result_data['evidence_count'] == 0:
-            st.warning("⚠️ No live evidence found - analysis based on AI knowledge only")
+            st.warning("No live evidence found - analysis based on AI knowledge only")
         elif result_data['evidence_count'] < 3:
-            st.info("ℹ️ Limited evidence available - consider additional verification")
+            st.info("Limited evidence available - consider additional verification")
         else:
-            st.success(f"✅ Analyzed {result_data['evidence_count']} recent articles")
+            st.success(f"Analyzed {result_data['evidence_count']} recent articles")
         
-        st.markdown("### 🧠 Detailed AI Analysis")
-        with st.expander("📖 Click to view full analysis", expanded=True):
+        st.markdown("### Detailed AI Analysis")
+        with st.expander("Click to view full analysis", expanded=True):
             st.text_area("AI Analysis:", value=result_data['analysis'], height=400, disabled=True)
         
-        # Enhanced Evidence Section with Classification
-        st.markdown("### 📰 Evidence Analysis")
+        st.markdown("### Evidence Analysis")
         live_evidence = result_data.get('live_evidence', [])
         
         if not live_evidence:
             st.info("No direct online evidence found from trusted sources.")
         else:
-            # Get evidence classification
-            with st.spinner("🔍 Analyzing evidence alignment..."):
+            with st.spinner("Analyzing evidence alignment..."):
                 verifier = st.session_state.get('hybrid_verifier')
                 if verifier:
-                    tags_result = verifier.tag_evidence_support(query_text, live_evidence)
+                    try:
+                        tags_result = verifier.tag_evidence_support(query_text, live_evidence)
+                    except Exception:
+                        tags_result = {"items": [], "counts": {}}
                 else:
                     tags_result = {"items": [], "counts": {}}
             
-            # Show evidence alignment summary
             if tags_result and tags_result.get('items'):
                 counts = tags_result.get('counts', {})
                 supportive = counts.get('supportive', 0)
@@ -701,9 +768,8 @@ class EnhancedUI:
                 irrelevant = counts.get('irrelevant', 0)
                 total = len(live_evidence)
                 
-                st.markdown("#### 🧩 Evidence Alignment with Claim")
+                st.markdown("#### Evidence Alignment with Claim")
                 
-                # Create columns for the summary
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Supportive", supportive, delta=f"{(supportive/total)*100:.0f}%" if total > 0 else "0%")
@@ -715,7 +781,6 @@ class EnhancedUI:
                     consensus = "High" if supportive > contradictory * 2 else "Medium" if supportive > contradictory else "Low" if contradictory > supportive else "Mixed"
                     st.metric("Consensus", consensus)
                 
-                # Visualize with a bar chart (fallback if altair not available)
                 try:
                     import pandas as pd
                     import altair as alt
@@ -738,21 +803,18 @@ class EnhancedUI:
                     
                     st.altair_chart(bar_chart, use_container_width=True)
                     
-                except ImportError:
-                    # Simple text-based visualization as fallback
+                except Exception:
                     st.markdown("**Evidence Distribution:**")
                     if supportive > 0:
-                        st.markdown(f"🟢 Supportive: {'█' * supportive} ({supportive})")
+                        st.markdown(f"Supportive: {'█' * supportive} ({supportive})")
                     if contradictory > 0:
-                        st.markdown(f"🔴 Contradictory: {'█' * contradictory} ({contradictory})")
+                        st.markdown(f"Contradictory: {'█' * contradictory} ({contradictory})")
                     if irrelevant > 0:
-                        st.markdown(f"⚪ Irrelevant: {'█' * irrelevant} ({irrelevant})")
+                        st.markdown(f"Irrelevant: {'█' * irrelevant} ({irrelevant})")
                 
-                # Detailed evidence breakdown
-                with st.expander("📋 View Detailed Evidence Analysis", expanded=True):
-                    st.markdown("#### 🔍 Article-by-Article Analysis")
+                with st.expander("View Detailed Evidence Analysis", expanded=True):
+                    st.markdown("#### Article-by-Article Analysis")
                     
-                    # Sort by relevance (supportive first, then contradictory, then irrelevant)
                     sorted_items = sorted(tags_result['items'], 
                                         key=lambda x: ['supportive', 'contradictory', 'irrelevant'].index(x['tag']))
                     
@@ -761,21 +823,19 @@ class EnhancedUI:
                         if 0 <= idx-1 < len(live_evidence):
                             article = live_evidence[idx-1]
                             
-                            # Color coding and icons
                             tag_config = {
-                                'supportive': {'icon': '🟢', 'color': '#2ECC71', 'label': 'Supports Claim'},
-                                'contradictory': {'icon': '🔴', 'color': '#E74C3C', 'label': 'Contradicts Claim'},
-                                'irrelevant': {'icon': '⚪', 'color': '#95A5A6', 'label': 'Not Directly Related'}
+                                'supportive': {'label': 'Supports Claim', 'color': '#2ECC71'},
+                                'contradictory': {'label': 'Contradicts Claim', 'color': '#E74C3C'},
+                                'irrelevant': {'label': 'Not Directly Related', 'color': '#95A5A6'}
                             }
                             
                             config = tag_config.get(item['tag'], tag_config['irrelevant'])
                             
-                            # Create a nice card for each article
-                            st.markdown(f"""
+                            card_html = dedent(f"""
                             <div style="border-left: 4px solid {config['color']}; padding: 10px; margin: 10px 0; background: #f8f9fa;">
-                                <div style="display: flex; justify-content: between; align-items: start;">
+                                <div style="display: flex; justify-content: space-between; align-items: start;">
                                     <div style="flex: 1;">
-                                        <strong>{config['icon']} {config['label']}</strong><br/>
+                                        <strong>{config['label']}</strong><br/>
                                         <a href="{article['link']}" target="_blank" style="font-size: 14px; color: #0066cc;">{article['title']}</a><br/>
                                         <small style="color: #666;">
                                             Source: {article.get('source', 'Unknown')} | 
@@ -787,19 +847,21 @@ class EnhancedUI:
                                     <strong>AI Rationale:</strong> {item['rationale']}
                                 </div>
                             </div>
-                            """, unsafe_allow_html=True)
+                            """).lstrip()
+
+                            # render card via components.html (height adjusted to approximate content)
+                            components.html(card_html, height=140, scrolling=False)
             else:
-                # Fallback to simple list if classification failed
-                st.success(f"✅ Found {len(live_evidence)} related article(s):")
+                st.success(f"Found {len(live_evidence)} related article(s):")
                 for e in live_evidence:
                     pub = e.get('published', '')
                     source_info = f" ({e.get('source', '')})" if e.get('source') else ""
                     if pub:
-                        st.markdown(f"- 📰 [{e['title']}]({e['link']}){source_info}  \n  <small>{pub}</small>", unsafe_allow_html=True)
+                        st.markdown(f"- [{e['title']}]({e['link']}){source_info}  \n  <small>{pub}</small>", unsafe_allow_html=True)
                     else:
-                        st.markdown(f"- 📰 [{e['title']}]({e['link']}){source_info}")
+                        st.markdown(f"- [{e['title']}]({e['link']}){source_info}")
 
-        st.markdown("### 📰 Recommended Sources for Cross-checking")
+        st.markdown("### Recommended Sources for Cross-checking")
         for s in EnhancedAppConfig.TRUSTED_SOURCES:
             st.markdown(f"- {s}")
 
@@ -807,7 +869,7 @@ class EnhancedUI:
     
     @staticmethod
     def render_download_section(result_data):
-        st.markdown("### 📥 Download Verification Report")
+        st.markdown("### Download Verification Report")
         def generate_pdf_report_bytes():
             from io import BytesIO
             from reportlab.lib.pagesizes import A4
@@ -825,8 +887,8 @@ class EnhancedUI:
             subtitle_style = ParagraphStyle('Subtitle', parent=styles['Heading2'], fontSize=12, textColor=colors.HexColor(EnhancedAppConfig.COLORS['secondary']), alignment=TA_CENTER)
             body_style = ParagraphStyle('Body', parent=styles['Normal'], fontSize=11, alignment=TA_JUSTIFY, leading=14)
 
-            story.append(Paragraph("🇮🇳 Indian News Verifier", title_style))
-            story.append(Paragraph("AI-Powered Fake News Detection Report", subtitle_style))
+            story.append(Paragraph("Bharat Fact", title_style))
+            story.append(Paragraph("AI-Powered Fact Checking Report", subtitle_style))
             story.append(Spacer(1, 0.2*inch))
 
             news_claim = st.session_state.get('last_query', 'Not available')
@@ -855,12 +917,11 @@ class EnhancedUI:
                 story.append(Paragraph(para, body_style))
                 story.append(Spacer(1, 0.05*inch))
 
-            # Add evidence summary
             if result_data.get('live_evidence'):
                 story.append(Spacer(1, 0.1*inch))
                 story.append(Paragraph("<b>Live Evidence Sources Analyzed:</b>", styles['Heading3']))
-                for evidence in result_data['live_evidence'][:5]:  # Top 5
-                    story.append(Paragraph(f"• {evidence['title'][:80]}...", body_style))
+                for evidence in result_data['live_evidence'][:5]:
+                    story.append(Paragraph(f"• {evidence.get('title','')[:120]}...", body_style))
                     story.append(Spacer(1, 0.02*inch))
 
             story.append(Spacer(1, 0.2*inch))
@@ -882,14 +943,13 @@ class EnhancedUI:
             pdf_bytes = generate_pdf_report_bytes()
             news_claim = st.session_state.get('last_query', '')
             if news_claim:
-                clean_name = re.sub(r'[^\w\s-]', '', news_claim)[:50].strip()
-                clean_name = re.sub(r'\s+', '_', clean_name)
+                clean_name = _safe_filename(news_claim)[:50]
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                filename = f"fact_check_{clean_name}_{timestamp}.pdf"
+                filename = f"bharatfact_{clean_name}_{timestamp}.pdf"
             else:
-                filename = f"fact_check_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                filename = f"bharatfact_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
 
-            st.download_button("📄 Download PDF Report", data=pdf_bytes, file_name=filename, mime="application/pdf")
+            st.download_button("Download PDF Report", data=pdf_bytes, file_name=filename, mime="application/pdf")
         except Exception as e:
             st.error(f"Error generating PDF: {e}")
             st.info("Install reportlab: pip install reportlab")
@@ -901,36 +961,34 @@ class EnhancedUI:
 def main():
     BeautifulUI.setup_page_config()
     
-    # Initialize hybrid verifier
     if 'hybrid_verifier' not in st.session_state:
         st.session_state['hybrid_verifier'] = HybridNewsVerifier()
     
     BeautifulUI.render_header()
     BeautifulUI.render_sidebar()
     
-    # Use the original verification form (same UI)
     news_text, verify_clicked, is_example = BeautifulUI.render_verification_form()
     
     if (verify_clicked and news_text.strip()) or is_example:
         st.session_state['last_query'] = news_text
         verifier = st.session_state['hybrid_verifier']
         
-        with st.spinner("🔍 Hybrid verification in progress: Searching live sources + AI analysis..."):
+        with st.spinner("Hybrid verification in progress: Searching live sources + AI analysis..."):
             result = verifier.verify_news(news_text)
         
         EnhancedUI.render_enhanced_results(result, news_text)
     
     elif verify_clicked and not news_text.strip():
-        st.warning("⚠️ Please enter some news text to verify!")
+        st.warning("Please enter some news text to verify.")
     
-    # Footer
-    st.markdown("---")
-    st.markdown(f"""
-    <div style='text-align: center; color: #7F8C8D; padding: 2rem 0;'>
-        <p><strong>🇮🇳 Indian News Verifier</strong> • Fighting Misinformation with AI</p>
-        <p><em>Made with ❤️ by deepak</em></p>
+    # footer rendered via components.html to avoid markdown code rendering
+    footer_html = dedent(f"""
+    <div style='text-align: center; color: #7F8C8D; padding: 8px 0 12px 0; font-size: 0.9rem;'>
+        <p><strong>Bharat Fact</strong> • Fighting Misinformation with AI</p>
     </div>
-    """, unsafe_allow_html=True)
+    """).lstrip()
+    st.markdown("---")
+    components.html(footer_html, height=60, scrolling=False)
 
 if __name__ == "__main__":
     main()
