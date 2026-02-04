@@ -86,6 +86,12 @@ class EnhancedAppConfig:
 CACHE_DIR = Path(".cache")
 CACHE_DIR.mkdir(exist_ok=True)
 CACHE_FILE = CACHE_DIR / "verification_cache.json"
+MODEL_CACHE_FILE = CACHE_DIR / "model_cache.json"
+MAX_CACHE_SIZE = 100  # Maximum number of cached verifications
+CACHE_TTL_DAYS = 30  # Cache expires after 30 days
+MODEL_CACHE_FILE = CACHE_DIR / "model_cache.json"
+MAX_CACHE_SIZE = 100  # Maximum number of cached verifications
+CACHE_TTL_DAYS = 30  # Cache expires after 30 days
 
 # =========================
 # UTILITIES
@@ -164,12 +170,55 @@ def _claim_hash(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _load_model_cache() -> Dict[str, Any]:
+    """Load cached model information to avoid repeated list_models calls."""
+    if not MODEL_CACHE_FILE.exists():
+        return {}
+    try:
+        with open(MODEL_CACHE_FILE, "r", encoding="utf-8") as f:
+            cache_data = json.load(f)
+            # Check if cache is still valid (24 hour TTL)
+            if cache_data.get("timestamp"):
+                cache_time = datetime.fromisoformat(cache_data["timestamp"])
+                if datetime.now() - cache_time < timedelta(hours=24):
+                    return cache_data
+        return {}
+    except Exception:
+        return {}
+
+def _save_model_cache(model_name: str, available_models: List[str]) -> None:
+    """Save model information to cache."""
+    try:
+        cache_data = {
+            "model_name": model_name,
+            "available_models": available_models,
+            "timestamp": datetime.now().isoformat()
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=CACHE_DIR, delete=False
+        ) as tmp:
+            json.dump(cache_data, tmp, ensure_ascii=False, indent=2)
+            os.replace(tmp.name, MODEL_CACHE_FILE)
+    except Exception:
+        pass
+
 def _load_verification_cache() -> Dict[str, Any]:
     if not CACHE_FILE.exists():
         return {}
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            cache_data = json.load(f)
+            # Filter expired entries
+            filtered_cache = {}
+            for key, value in cache_data.items():
+                if isinstance(value, dict) and "timestamp" in value:
+                    cache_time = datetime.fromisoformat(value["timestamp"])
+                    if datetime.now() - cache_time < timedelta(days=CACHE_TTL_DAYS):
+                        filtered_cache[key] = value
+                else:
+                    # Legacy entries without timestamp - keep for now
+                    filtered_cache[key] = value
+            return filtered_cache
     except Exception as e:
         st.warning(f"Failed to load cache: {e}")
         return {}
@@ -178,9 +227,27 @@ def _load_verification_cache() -> Dict[str, Any]:
 def _save_verification_cache(cache: Dict[str, Any]) -> None:
     """
     Safely save cache using atomic write to prevent corruption.
+    Enforces size limit and adds timestamps.
     """
     try:
         CACHE_DIR.mkdir(exist_ok=True)
+        
+        # Add timestamp to new entries and enforce size limit
+        # Keep only the most recent MAX_CACHE_SIZE entries
+        if len(cache) > MAX_CACHE_SIZE:
+            # Sort by timestamp (newest first) and keep top MAX_CACHE_SIZE
+            sorted_items = sorted(
+                cache.items(),
+                key=lambda x: x[1].get("timestamp", ""),
+                reverse=True
+            )[:MAX_CACHE_SIZE]
+            cache = dict(sorted_items)
+        
+        # Ensure all entries have timestamps
+        current_time = datetime.now().isoformat()
+        for key, value in cache.items():
+            if isinstance(value, dict) and "timestamp" not in value:
+                value["timestamp"] = current_time
 
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -815,6 +882,7 @@ class HybridNewsVerifier:
     def _setup_gemini_ai(self):
         """
         Initialize Gemini AI safely without making API calls at startup.
+        Issue 1: Cache model discovery to avoid repeated list_models() calls.
         """
         try:
             import google.generativeai as genai
@@ -829,15 +897,79 @@ class HybridNewsVerifier:
         try:
             genai.configure(api_key=api_key)
             
-            # Get list of available models
-            available_models = []
+            # Issue 1: Use session state cache first (fastest, no API call)
+            if 'gemini_model_name' in st.session_state and st.session_state.gemini_model_name:
+                try:
+                    cached_model_name = st.session_state.gemini_model_name
+                    test_model = genai.GenerativeModel(cached_model_name)
+                    # Test if model actually works by checking it can be created
+                    self.model = test_model
+                    self.model_name = cached_model_name
+                    self.is_ready = True
+                    return  # Success with session cache - no API call!
+                except Exception as e:
+                    # Session cache invalid, clear it and try next cache
+                    st.session_state.gemini_model_name = None
+            
+            # Try file cache (persists across sessions, 24h TTL)
+            model_cache = _load_model_cache()
+            cached_model_name = model_cache.get("model_name")
+            if cached_model_name:
+                try:
+                    test_model = genai.GenerativeModel(cached_model_name)
+                    self.model = test_model
+                    self.model_name = cached_model_name
+                    self.is_ready = True
+                    # Update session cache
+                    st.session_state.gemini_model_name = cached_model_name
+                    return  # Success with file cache - no list_models() call!
+                except Exception as e:
+                    # File cache invalid - clear it and try direct creation
+                    # Delete the invalid cache file
+                    try:
+                        if MODEL_CACHE_FILE.exists():
+                            MODEL_CACHE_FILE.unlink()
+                    except Exception:
+                        pass
+            
+            # Both caches failed - try direct model creation (no list_models call)
+            # This avoids quota consumption from list_models()
+            # Try multiple model variants that might be available
+            preferred_models = [
+                "gemini-1.5-flash",
+                "gemini-1.5-pro", 
+                "gemini-pro",
+                "gemini-2.0-flash-exp"
+            ]
+            for model_name in preferred_models:
+                try:
+                    test_model = genai.GenerativeModel(model_name)
+                    # If we get here, model creation succeeded
+                    self.model = test_model
+                    self.model_name = model_name
+                    self.is_ready = True
+                    # Cache the successful model
+                    st.session_state.gemini_model_name = model_name
+                    _save_model_cache(model_name, [model_name])
+                    return  # Success - no list_models() call!
+                except Exception as e:
+                    # Model not available, try next one
+                    error_str = str(e)
+                    if "404" in error_str or "not found" in error_str.lower():
+                        # This model definitely doesn't exist, continue to next
+                        continue
+                    # Other errors might be temporary, but still try next model
+                    continue
+            
+            # Last resort: only call list_models() if direct creation fails
+            # This should rarely happen with valid API keys, and we cache the result
+            model_name = None
             try:
                 all_models = list(genai.list_models())
+                available_models = []
                 for m in all_models:
-                    # Check if model supports generateContent
                     if hasattr(m, 'supported_generation_methods'):
                         if 'generateContent' in m.supported_generation_methods:
-                            # Extract model name (remove "models/" prefix)
                             model_name_full = m.name
                             if "/" in model_name_full:
                                 short_name = model_name_full.split("/")[-1]
@@ -848,68 +980,45 @@ class HybridNewsVerifier:
                                 'short_name': short_name,
                                 'model_obj': m
                             })
-            except Exception as e:
-                # If listing fails, we'll try direct creation
-                pass
-            
-            # Priority order: prefer free-tier models that actually exist
-            preferred_short_names = [
-                "gemini-1.5-flash",  # Most common free tier
-                "gemini-1.5-pro",    # Free tier with limits  
-            ]
-            
-            model_name = None
-            
-            # First, try to find preferred models from the available list
-            if available_models:
-                for preferred in preferred_short_names:
+                
+                # Try preferred models first
+                preferred_models = ["gemini-1.5-flash", "gemini-1.5-pro"]
+                for preferred in preferred_models:
                     for model_info in available_models:
                         if preferred == model_info['short_name'] or preferred in model_info['full_name']:
-                            # Try to actually create and test the model
                             try:
                                 test_model = genai.GenerativeModel(model_info['short_name'])
-                                # Do a minimal test to ensure it works
                                 model_name = model_info['short_name']
                                 break
                             except Exception:
-                                # This model doesn't work, try next
                                 continue
                     if model_name:
                         break
-            
-            # If no preferred model found, try any available model
-            if not model_name and available_models:
-                for model_info in available_models:
-                    try:
-                        test_model = genai.GenerativeModel(model_info['short_name'])
-                        model_name = model_info['short_name']
-                        break
-                    except Exception:
-                        continue
-            
-            # Last resort: try direct creation of common models (without listing)
-            if not model_name:
-                for preferred in preferred_short_names:
-                    try:
-                        test_model = genai.GenerativeModel(preferred)
-                        model_name = preferred
-                        break
-                    except Exception:
-                        continue
+                
+                # If no preferred model, try any available
+                if not model_name and available_models:
+                    for model_info in available_models:
+                        try:
+                            test_model = genai.GenerativeModel(model_info['short_name'])
+                            model_name = model_info['short_name']
+                            break
+                        except Exception:
+                            continue
+            except Exception:
+                # If listing fails, model_name remains None
+                pass
             
             if not model_name:
-                # Build helpful error message
-                error_msg = "No available Gemini models found. "
-                if available_models:
-                    model_list = [m['short_name'] for m in available_models[:5]]
-                    error_msg += f"Available models: {', '.join(model_list)}. "
-                error_msg += "Please check your API key and ensure you have access to Gemini models at https://ai.google.dev/"
+                error_msg = "No available Gemini models found. Please check your API key and ensure you have access to Gemini models at https://ai.google.dev/"
                 raise Exception(error_msg)
             
-            # Create the actual model instance
+            # Create the actual model instance and cache it
             self.model = genai.GenerativeModel(model_name)
             self.model_name = model_name
             self.is_ready = True
+            # Cache the successful model (both session and file cache)
+            st.session_state.gemini_model_name = model_name
+            _save_model_cache(model_name, [model_name])
         except Exception as e:
             self.initialization_error = f"Gemini initialization failed: {e}"
 
@@ -933,7 +1042,8 @@ class HybridNewsVerifier:
         except Exception:
             live_evidence = []
 
-        prompt = self._create_hybrid_prompt(news_claim, live_evidence)
+        # Issue 2: Include evidence tagging in main prompt to reduce API calls
+        prompt = self._create_hybrid_prompt(news_claim, live_evidence, include_evidence_tags=True)
 
         # Retry logic for rate limits with exponential backoff
         max_retries = 3
@@ -953,34 +1063,88 @@ class HybridNewsVerifier:
                 error_str = str(e)
                 # Check if it's a model not found error (404) - handle this first
                 if "404" in error_str and ("not found" in error_str.lower() or "models/" in error_str):
-                    # Model doesn't exist, try to reinitialize with a different model
+                    # Model doesn't exist - clear invalid cache and reinitialize
                     if attempt == 0:  # Only try alternative models on first attempt
-                        st.warning("Selected model is not available. Trying to find an alternative model...")
+                        st.warning("Cached model is not available. Finding a working model...")
                         try:
-                            # Try to find and use a different model
+                            # Clear invalid caches
+                            st.session_state.gemini_model_name = None
+                            try:
+                                if MODEL_CACHE_FILE.exists():
+                                    MODEL_CACHE_FILE.unlink()
+                            except Exception:
+                                pass
+                            
+                            # Reinitialize model discovery (this will try all available models)
                             import google.generativeai as genai
-                            for alt_model in ["gemini-1.5-flash", "gemini-1.5-pro"]:
+                            genai.configure(api_key=EnhancedAppConfig.GEMINI_API_KEY)
+                            
+                            # Try all possible models
+                            alt_models = [
+                                "gemini-1.5-flash",
+                                "gemini-1.5-pro",
+                                "gemini-pro",
+                                "gemini-2.0-flash-exp"
+                            ]
+                            
+                            for alt_model in alt_models:
                                 try:
                                     alt_gen = genai.GenerativeModel(alt_model)
+                                    # Test with a small prompt first
+                                    test_prompt = "Test"
+                                    test_response = alt_gen.generate_content(test_prompt)
+                                    # If test works, try the actual prompt
                                     alt_response = alt_gen.generate_content(prompt)
                                     ai_text = getattr(alt_response, "text", None) or (
                                         alt_response.get("text") if isinstance(alt_response, dict) else None
                                     )
                                     if ai_text:
-                                        # Update model for future use
+                                        # Update model for future use and cache it
                                         self.model = alt_gen
                                         self.model_name = alt_model
+                                        st.session_state.gemini_model_name = alt_model
+                                        _save_model_cache(alt_model, [alt_model])
                                         st.success(f"Switched to model: {alt_model}")
                                         break
-                                except Exception:
+                                except Exception as model_error:
+                                    # This model doesn't work, try next
                                     continue
+                            
                             if ai_text:
                                 break  # Success with alternative model
                             else:
-                                return self._create_error_response(
-                                    f"Model not available. Please check your API key and available models at https://ai.google.dev/. "
-                                    f"Original error: {error_str[:200]}"
-                                )
+                                # Try list_models as last resort
+                                try:
+                                    all_models = list(genai.list_models())
+                                    for m in all_models:
+                                        if hasattr(m, 'supported_generation_methods'):
+                                            if 'generateContent' in m.supported_generation_methods:
+                                                model_name_full = m.name.split("/")[-1] if "/" in m.name else m.name
+                                                try:
+                                                    alt_gen = genai.GenerativeModel(model_name_full)
+                                                    alt_response = alt_gen.generate_content(prompt)
+                                                    ai_text = getattr(alt_response, "text", None) or (
+                                                        alt_response.get("text") if isinstance(alt_response, dict) else None
+                                                    )
+                                                    if ai_text:
+                                                        self.model = alt_gen
+                                                        self.model_name = model_name_full
+                                                        st.session_state.gemini_model_name = model_name_full
+                                                        _save_model_cache(model_name_full, [model_name_full])
+                                                        st.success(f"Using model: {model_name_full}")
+                                                        break
+                                                except Exception:
+                                                    continue
+                                    if ai_text:
+                                        break
+                                except Exception:
+                                    pass
+                                
+                                if not ai_text:
+                                    return self._create_error_response(
+                                        f"No available Gemini models found. Please check your API key at https://ai.google.dev/. "
+                                        f"Original error: {error_str[:200]}"
+                                    )
                         except Exception as reinit_error:
                             return self._create_error_response(
                                 f"Model initialization failed. Please check your API key. "
@@ -1151,19 +1315,39 @@ Return STRICT JSON like:
             "counts": counts
         }
 
-    def _create_hybrid_prompt(self, news_claim: str, live_evidence: list):
+    def _create_hybrid_prompt(self, news_claim: str, live_evidence: list, include_evidence_tags: bool = True):
+        """
+        Issue 2: Create prompt that combines verification and evidence tagging in one call.
+        This reduces API calls from 2 to 1 per verification.
+        """
         evidence_text = ""
+        evidence_list_for_tagging = ""
         if live_evidence:
             evidence_text = "LIVE NEWS EVIDENCE FOUND:\n"
+            evidence_list_for_tagging = "EVIDENCE ARTICLES TO CLASSIFY:\n"
             for i, article in enumerate(live_evidence[:8], 1):
-                evidence_text += f"{i}. {article.get('title','')}\n"
+                title = article.get('title', '')
+                evidence_text += f"{i}. {title}\n"
                 if article.get('source'):
                     evidence_text += f"   Source: {article.get('source')}\n"
                 if article.get('published'):
                     evidence_text += f"   Published: {article.get('published')}\n"
                 evidence_text += f"   URL: {article.get('link')}\n\n"
+                # For tagging, just include titles with index
+                evidence_list_for_tagging += f"{i}. {title}\n"
         else:
             evidence_text = "LIVE NEWS EVIDENCE: No recent articles found from trusted sources.\n"
+        
+        # Issue 2: Include evidence tagging in the main prompt to avoid second API call
+        tagging_instruction = ""
+        if include_evidence_tags and live_evidence:
+            tagging_instruction = f"""
+
+EVIDENCE CLASSIFICATION (include this in your response):
+After your main analysis, classify each evidence article as supportive, contradictory, or irrelevant.
+Return a JSON array like: [{{"index":1,"tag":"supportive","rationale":"brief reason"}}, ...]
+{evidence_list_for_tagging}
+"""
         
         return f"""
 Bharat Fact - INDIAN NEWS FACT-CHECK ANALYSIS WITH LIVE EVIDENCE
@@ -1203,6 +1387,7 @@ RED_FLAGS:
 
 RECOMMENDATION:
 [Final assessment and advice for readers]
+{tagging_instruction}
 """
 
     def _parse_hybrid_response(self, ai_text: str, live_evidence: list):
