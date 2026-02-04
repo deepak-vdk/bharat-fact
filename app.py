@@ -838,9 +838,9 @@ class HybridNewsVerifier:
 
         # ✅ Return cached result if available
         if claim_key in cache:
-            cached = cache[claim_key]
-            cached["cached"] = True
-            return cached
+            cached_copy = cache[claim_key].copy()
+            cached_copy["cached"] = True
+            return cached_copy
 
         # ❌ Not cached → full verification
         try:
